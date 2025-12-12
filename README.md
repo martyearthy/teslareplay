@@ -1,6 +1,6 @@
 # TeslaCam Blackbox
 
-[**Use the hosted version →**](https://martyearthy.github.io/teslacamblackbox/)
+[**Use the hosted version →**](https://martyearthy.github.io/teslareplay/)
 
 A modern web-based tool for viewing Tesla Dashcam footage with integrated telemetry visualization. This application parses MP4 files directly in your browser, extracts the embedded SEI (Supplemental Enhancement Information) metadata, and overlays driving data in real-time.
 
