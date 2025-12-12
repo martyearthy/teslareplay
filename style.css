@@ -1,0 +1,369 @@
+/* Reset & Base */
+:root {
+    --bg-color: #121212;
+    --text-color: #e0e0e0;
+    --accent-color: #3e9cbf; /* Tesla Blue-ish */
+    --panel-bg: rgba(30, 30, 30, 0.85);
+    --border-color: #444;
+    --vis-bg: rgba(0, 0, 0, 0.7);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* App Layout */
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+
+.video-container {
+    flex: 1;
+    position: relative;
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+}
+
+canvas {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+/* Drop Overlay */
+.drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.drop-overlay.hidden { display: none; }
+.drop-overlay:hover { background: rgba(0, 0, 0, 0.7); }
+.drop-message { text-align: center; color: #888; }
+.drop-message svg { margin-bottom: 10px; }
+#fileInput { display: none; }
+
+/* Floating Visualization */
+.dashboard-vis, .map-vis {
+    position: absolute;
+    background: var(--vis-bg);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+    overflow: hidden;
+    display: none; /* Hidden until loaded */
+    transition: height 0.3s ease;
+}
+
+.dashboard-vis.visible, .map-vis.visible { display: block; }
+
+.dashboard-vis {
+    top: 20px;
+    right: 20px;
+    width: 280px;
+}
+
+.map-vis {
+    top: 20px;
+    left: 20px;
+    width: 250px;
+    height: 250px;
+    display: none;
+    flex-direction: column;
+}
+
+.map-vis.visible { display: flex; }
+
+#map {
+    flex: 1;
+    width: 100%;
+    background: #222; /* Placeholder bg */
+}
+
+.vis-header {
+    height: 20px;
+    background: rgba(255, 255, 255, 0.05);
+    cursor: grab;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.vis-header:active { cursor: grabbing; }
+.drag-handle {
+    color: #666;
+    font-size: 10px;
+    letter-spacing: 2px;
+}
+
+.vis-content {
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+/* Extra Data (Collapsible) */
+.extra-data-container {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.toggle-btn {
+    width: 100%;
+    height: 20px;
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: background 0.2s;
+}
+.toggle-btn:hover { background: rgba(255, 255, 255, 0.05); }
+
+.toggle-btn .chevron {
+    width: 16px;
+    height: 16px;
+    transition: transform 0.3s ease;
+}
+
+.extra-data-container.expanded .chevron {
+    transform: rotate(180deg);
+}
+
+.extra-data {
+    height: 0;
+    overflow: hidden;
+    transition: height 0.3s ease;
+}
+
+.extra-data-container.expanded .extra-data {
+    height: 100px; /* Adjust based on content */
+}
+
+.data-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    padding: 10px 15px 15px 15px;
+}
+
+.data-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.data-item .label {
+    font-size: 9px;
+    color: #888;
+    text-transform: uppercase;
+}
+
+.data-item .val {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: monospace;
+    color: var(--accent-color);
+}
+
+
+/* Turn Signals */
+.turn-signal {
+    width: 30px;
+    height: 30px;
+    color: #333;
+    transition: color 0.1s;
+}
+.turn-signal.active { color: #0f0; filter: drop-shadow(0 0 5px #0f0); }
+
+/* Center Cluster */
+.center-cluster {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+}
+
+/* Gear */
+.gear-indicator {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 5px;
+    display: flex;
+    gap: 8px;
+}
+.gear { font-weight: bold; }
+.gear.active { color: var(--text-color); }
+
+/* Speed */
+.speed-display {
+    text-align: center;
+    margin-bottom: 5px;
+}
+.speed-value {
+    font-size: 48px;
+    font-weight: 300;
+    line-height: 1;
+}
+.speed-unit {
+    font-size: 10px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Autopilot / Steering */
+.autopilot-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    color: #888;
+}
+.steering-icon {
+    width: 24px;
+    height: 24px;
+    transition: transform 0.1s linear, color 0.3s;
+}
+.autopilot-status.active-ap { color: #3e9cbf; } /* Autosteer Blue */
+.autopilot-status.active-fsd { color: #ff0000; } /* Actually typically rainbow or blue in newer UI, stick to concept */
+
+#apText { font-size: 10px; font-weight: 600; text-transform: uppercase; }
+
+/* Pedals */
+.pedals-cluster {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 0 10px;
+}
+
+.brake-indicator {
+    width: 50px;
+    height: 18px;
+    background: #333;
+    border-radius: 4px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 0.5;
+    transition: all 0.1s;
+}
+
+.brake-indicator.active {
+    background: #ff0000;
+    opacity: 1;
+    box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+}
+
+.brake-text {
+    font-size: 9px;
+    font-weight: bold;
+    color: #000; /* Dark text on dark bg (inactive) or red bg (active) - tweak below */
+    display: none;
+}
+.brake-indicator.active .brake-text {
+    display: block;
+    color: white;
+}
+/* When inactive show 'B' or just darken */
+.brake-indicator:not(.active) {
+    background: #222;
+    border: 1px solid #444;
+}
+.brake-indicator:not(.active) .brake-text {
+    display: block;
+    color: #444;
+}
+
+.accel-meter {
+    flex: 1;
+    height: 8px;
+    background: #222;
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid #444;
+}
+
+.accel-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #666, #fff);
+    transition: width 0.1s linear;
+}
+
+
+/* Controls Bar */
+.controls {
+    height: 60px;
+    background: var(--panel-bg);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 15px;
+}
+
+.control-btn {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.control-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.control-btn:disabled { color: #555; cursor: default; }
+
+.progress-bar {
+    flex: 1;
+    height: 4px;
+    -webkit-appearance: none;
+    background: #444;
+    border-radius: 2px;
+    outline: none;
+}
+.progress-bar::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--text-color);
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.time-display {
+    font-family: monospace;
+    font-size: 12px;
+    color: #888;
+    min-width: 80px;
+    text-align: right;
+}

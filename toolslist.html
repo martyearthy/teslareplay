@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Dashcam Tools</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg-color: #ffffff;
+            --text-color: #1a1a1a;
+            --text-muted: #666666;
+            --link-color: #0080ff;
+            --border-color: #e0e0e0;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #1a1a1a;
+                --text-color: #e8e8e8;
+                --text-muted: #999999;
+                --link-color: #4da6ff;
+                --border-color: #333333;
+            }
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 1.5rem 1rem;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        @media (min-width: 640px) {
+            body {
+                padding: 2rem 1rem;
+            }
+        }
+
+        h1 {
+            margin-bottom: 0.25rem;
+            font-size: clamp(1.5rem, 5vw, 2rem);
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            margin-top: 0;
+        }
+
+        a {
+            color: var(--link-color);
+        }
+
+        ul {
+            padding-left: 1.25rem;
+        }
+
+        .note {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .nav {
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+
+<body>
+    <p class="nav">
+        <a href="https://github.com/teslamotors/dashcam">
+            View on GitHub
+        </a>
+    </p>
+    <h1>Tesla Dashcam Tools</h1>
+    <p class="subtitle">Tools for viewing and extracting metadata from supported Tesla Dashcam videos.</p>
+
+    <ul>
+        <li><a href="sei_explorer.html">SEI Explorer</a> — view dashcam footage with SEI metadata displayed alongside
+            video playback.</li>
+        <li><a href="https://github.com/teslamotors/dashcam/blob/master/sei_extractor.py">Python CLI</a> — Python-based
+            metadata extractor for extracting SEI data from MP4 files.</li>
+        <li><a href="https://github.com/teslamotors/dashcam/blob/master/dashcam.proto">Protobuf schema</a> — the
+            protobuf spec that is used to decode SEI data in the MP4 file(s).</li>
+    </ul>
+    <p class="note">Not all Tesla-generated dashcam clips contain SEI data. Only clips recorded on Tesla firmware
+        2025.44.25 or later and HW3 or above contain SEI data. If car is parked, SEI data may not be present.</p>
+</body>
+
+</html>

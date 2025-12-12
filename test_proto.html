@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Protobuf Test</title>
+</head>
+<body>
+    <h1>Protobuf Test</h1>
+    <pre id="output"></pre>
+    <script src="vendor/protobuf.min.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        function log(msg) { output.textContent += msg + '\n'; }
+
+        async function run() {
+            try {
+                const response = await fetch('dashcam.proto');
+                const protoText = await response.text();
+                const root = protobuf.parse(protoText).root;
+                const SeiMetadata = root.lookupType('SeiMetadata');
+                
+                // Sample data from frame (hex string from python output, after 0x69)
+                // 08 01 10 01 18 A8 B7 04 25 98 99 99 3F 35 00 00 C0 3F 38 01 48 01 59 9C 52 B9 E4 13 27 43 40 61 04 56 0E 2D B2 95 5E C0 69 DB 10 7C 11 DF 49 33 40 71 00 00 03 00 20 85 EB 91
+                // Note: 03 00 20 includes an emulation prevention byte 03? 
+                // In python output: 71 00 00 03 00 20. 
+                // 00 00 03 -> 00 00.
+                
+                const hex = "08 01 10 01 18 A8 B7 04 25 98 99 99 3F 35 00 00 C0 3F 38 01 48 01 59 9C 52 B9 E4 13 27 43 40 61 04 56 0E 2D B2 95 5E C0 69 DB 10 7C 11 DF 49 33 40 71 00 00 00 20 85 EB 91"; 
+                // I replaced 00 00 03 00 with 00 00 00 assuming stripping happened manually here for test
+                
+                const bytes = new Uint8Array(hex.split(' ').map(h => parseInt(h, 16)));
+                
+                const message = SeiMetadata.decode(bytes);
+                log('Decoded Message Keys: ' + Object.keys(message).join(', '));
+                log('Decoded Message JSON: ' + JSON.stringify(message, null, 2));
+                
+            } catch (e) {
+                log('Error: ' + e);
+            }
+        }
+        run();
+    </script>
+</body>
+</html>

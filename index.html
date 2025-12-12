@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TeslaCam Blackbox</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- File Drop / Video Area -->
+        <div class="video-container" id="videoContainer">
+            <div class="drop-overlay" id="dropOverlay">
+                <div class="drop-message">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <p>Drop Tesla Dashcam MP4 here</p>
+                </div>
+                <input type="file" id="fileInput" accept="video/mp4">
+            </div>
+            <canvas id="videoCanvas"></canvas>
+            
+            <!-- Floating Map -->
+            <div id="mapVis" class="map-vis">
+                <div class="vis-header">
+                    <div class="drag-handle">:::</div>
+                </div>
+                <div id="map"></div>
+            </div>
+
+            <!-- Floating Visualization -->
+            <div id="dashboardVis" class="dashboard-vis">
+                <div class="vis-header">
+                    <div class="drag-handle">:::</div>
+                </div>
+                <div class="vis-content">
+                    <div class="turn-signal left" id="blinkLeft">
+                        <svg viewBox="0 0 24 24"><path d="M14 7l-5 5 5 5V7z" fill="currentColor"/></svg>
+                    </div>
+                    
+                    <div class="center-cluster">
+                        <div class="gear-indicator">
+                            <span id="gearP" class="gear">P</span>
+                            <span id="gearR" class="gear">R</span>
+                            <span id="gearN" class="gear">N</span>
+                            <span id="gearD" class="gear">D</span>
+                        </div>
+                        <div class="speed-display">
+                            <div class="speed-value" id="speedValue">0</div>
+                            <div class="speed-unit">MPH</div>
+                        </div>
+                        <div class="autopilot-status" id="autopilotStatus">
+                            <div class="steering-icon" id="steeringIcon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 2v20M2 12h20"></path>
+                                </svg>
+                            </div>
+                            <span id="apText">Manual</span>
+                        </div>
+                        
+                        <div class="pedals-cluster">
+                            <div class="brake-indicator" id="brakeInd">
+                                <span class="brake-text">BRAKE</span>
+                            </div>
+                            <div class="accel-meter">
+                                <div class="accel-bar" id="accelBar"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="turn-signal right" id="blinkRight">
+                        <svg viewBox="0 0 24 24"><path d="M10 7l5 5-5 5V7z" fill="currentColor"/></svg>
+                    </div>
+                </div>
+
+                <!-- Telemetry Details -->
+                <div class="extra-data-container">
+                    <button id="toggleExtra" class="toggle-btn" title="Toggle Details">
+                        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
+                    <div id="extraData" class="extra-data">
+                        <div class="data-grid">
+                            <div class="data-item">
+                                <span class="label">Seq</span>
+                                <span id="valSeq" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Lat</span>
+                                <span id="valLat" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Lon</span>
+                                <span id="valLon" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Head</span>
+                                <span id="valHeading" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Acc X</span>
+                                <span id="valAccX" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Acc Y</span>
+                                <span id="valAccY" class="val">--</span>
+                            </div>
+                            <div class="data-item">
+                                <span class="label">Acc Z</span>
+                                <span id="valAccZ" class="val">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button id="playBtn" class="control-btn" disabled>
+                <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </button>
+            <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0" disabled>
+            <div class="time-display" id="timeDisplay">00:00</div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script src="vendor/protobuf.min.js"></script>
+    <script src="vendor/jszip.min.js"></script>
+    <script src="dashcam-mp4.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
