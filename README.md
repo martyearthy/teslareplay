@@ -172,7 +172,7 @@ These modes are toggled from the panel header (Dock/Float and Collapse/Expand) a
 ### High-Level Architecture
 Tesla Replay is intentionally “no build step”: **vanilla HTML/CSS/JS** with Web APIs.
 
-There are three major subsystems:
+The app is organized around a few major subsystems:
 
 1. **Playback + telemetry (single MP4)**
    - Parses an MP4 into frames with timestamps and attached SEI
@@ -194,6 +194,9 @@ There are three major subsystems:
    - Collapses each `SentryClips/<eventId>/` folder into a single UI item
    - Implements a “virtual playlist” timeline that maps a global ms offset → segment → local frame index
    - Displays an event marker derived from `event.json.timestamp` when available
+5. **State & transitions (centralized)**
+   - Runtime state is centralized in `src/state.js` and accessed through a single `state` object.
+   - The app maintains an explicit `state.mode` (`clip` vs `collection`) and uses a small transition helper (`setMode(...)`) to prevent “poisoned state” across mode switches.
 
 ### Repository Layout (Key Files)
 - **`index.html`**
@@ -202,12 +205,41 @@ There are three major subsystems:
   - Clip browser container (`#clipBrowser`) and list (`#clipList`)
   - Autoplay toggle (`#autoplayToggle`) and camera selector (`#cameraSelect`)
   - Multi-cam UI (`#multiCamGrid`, `#multiCamToggle`, `#multiLayoutSelect`, layout quick switch buttons)
+  - Loads the app via **native ES modules** (`<script type="module" src="script.js">`)
 
 - **`style.css`**
   - Dark UI styling and glassmorphism
   - Clip browser sidebar styles (list rows, badges, thumbnail + minimap tiles)
   - Multi-cam grid + focus-mode styling
   - Docked/collapsed panel layouts
+
+- **`script.js`** (module entrypoint)
+  - Wires DOM events to subsystems and orchestrates the app.
+  - Imports shared config and helpers from `src/` using native ES modules.
+  - Uses `state` as the single source of truth for runtime state.
+
+- **`src/state.js`**
+  - Central runtime state (`state`) with these top-level branches:
+    - `state.mode`: `clip` | `collection`
+    - `state.player`: `mp4`, `frames`, decoders, play/timer flags
+    - `state.library`: `clipGroups`, `clipGroupById`, `folderLabel`
+    - `state.selection`: `selectedGroupId`, `selectedCamera`
+    - `state.multi`: multi-cam enable/layout/master/streams
+    - `state.previews`: preview cache/observer/queue
+    - `state.collection`: active Sentry collection playback state
+    - `state.ui`: transient UI state (focus, popouts, scrubbing)
+
+- **`src/storageKeys.js`**
+  - Centralized `localStorage` keys (clips mode, multi enabled/layout).
+
+- **`src/multiLayouts.js`**
+  - Multi-cam layout preset definitions (`MULTI_LAYOUTS`) and default preset.
+
+- **`src/panelMode.js`**
+  - Clips panel mode controller (floating/docked/collapsed) with persistence.
+
+- **`src/utils.js`**
+  - Small shared helpers (`escapeHtml`, `cssEscape`).
 
 - **`script.js`** (core runtime)
   - **Initialization**
@@ -230,7 +262,9 @@ There are three major subsystems:
     - Timestamp alignment across cameras + per-tile focus mode
   - **Sentry collections**
     - `buildDisplayItems()` collapses Sentry groups into a single collection item per `eventId`
-    - `collectionState` manages virtual timeline playback across segments
+    - `state.collection.active` manages virtual timeline playback across segments
+  - **Explicit mode transitions**
+    - `setMode('clip' | 'collection')` centralizes cleanup when switching between clip playback and collection playback
 
 - **`dashcam-mp4.js`**
   - **`DashcamMP4`**: parses MP4 atoms and returns video configuration + frame stream
@@ -316,7 +350,7 @@ Multi-camera mode lives entirely in the frontend (no server-side work).
 #### Concepts
 - **Slots vs cameras**:
   - The grid is treated as a set of **UI slots** (`tl`, `tr`, `bl`, `br`), each mapped to a camera key.
-  - Layout presets are configured in `script.js` as `MULTI_LAYOUTS`.
+  - Layout presets are configured in `src/multiLayouts.js` as `MULTI_LAYOUTS`.
   - This design intentionally makes it easy to add future layouts (including 6-camera) without rewriting sync logic.
 
 - **Master camera**
@@ -340,6 +374,8 @@ Tesla Replay persists several UX choices so the app feels “sticky”:
 - `teslareplay.ui.clipsPrevMode`: last non-collapsed mode
 - `teslareplay.ui.multiEnabled`: `"1"` | `"0"`
 - `teslareplay.ui.multiLayout`: `fb_lr` | `fb_rl`
+
+> Implementation note: these keys are centralized in `src/storageKeys.js`.
 
 ### Sentry Collections (Implementation Details)
 Sentry collections are designed to avoid heavy upfront parsing:

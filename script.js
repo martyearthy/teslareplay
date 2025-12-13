@@ -1,70 +1,30 @@
+import { MULTI_LAYOUTS, DEFAULT_MULTI_LAYOUT } from './src/multiLayouts.js';
+import { CLIPS_MODE_KEY, CLIPS_PREV_MODE_KEY, MULTI_LAYOUT_KEY, MULTI_ENABLED_KEY } from './src/storageKeys.js';
+import { createClipsPanelMode } from './src/panelMode.js';
+import { escapeHtml, cssEscape } from './src/utils.js';
+import { state } from './src/state.js';
+
 // State
-let mp4 = null;
-let frames = null;
-let firstKeyframe = 0;
-let decoder = null;
-let decoding = false;
-let pendingFrame = null;
-let playing = false;
-let playTimer = null;
+const player = state.player;
+const library = state.library;
+const selection = state.selection;
+const multi = state.multi;
+const previews = state.previews;
 let seiType = null;
 let enumFields = null;
 
-// Folder/Clip Browser State (Phase 1)
-let clipGroups = [];
-let clipGroupById = new Map();
-let selectedGroupId = null;
-let selectedCamera = 'front';
-let folderLabel = null; // e.g. "TeslaCam" or picked folder name
-
 // Multi-camera playback (Step 6)
-let multiCamEnabled = false;
-let multiStreams = new Map(); // camera -> stream
-let masterCamera = 'front'; // drives timeline + dashboard + map
-let masterTimeIndex = 0;
-let multiLayoutId = 'fb_lr';
-let multiFocusSlot = null;
+// now lives in state.multi
 
-const MULTI_LAYOUT_KEY = 'teslareplay.ui.multiLayout';
-const MULTI_ENABLED_KEY = 'teslareplay.ui.multiEnabled';
-const MULTI_LAYOUTS = {
-    // Slot order is TL, TR, BL, BR (2x2)
-    fb_lr: {
-        name: 'Front/Back/Left/Right',
-        slots: [
-            { slot: 'tl', camera: 'front', label: 'Front' },
-            { slot: 'tr', camera: 'back', label: 'Back' },
-            { slot: 'bl', camera: 'left_repeater', label: 'Left' },
-            { slot: 'br', camera: 'right_repeater', label: 'Right' }
-        ]
-    },
-    fb_rl: {
-        name: 'Front/Back/Right/Left',
-        slots: [
-            { slot: 'tl', camera: 'front', label: 'Front' },
-            { slot: 'tr', camera: 'back', label: 'Back' },
-            { slot: 'bl', camera: 'right_repeater', label: 'Right' },
-            { slot: 'br', camera: 'left_repeater', label: 'Left' }
-        ]
-    }
-    // Future: add 6-cam layouts that include left/right pillar cameras.
-};
+// MULTI_LAYOUTS now lives in src/multiLayouts.js
 
-// Preview pipeline (lazy, cached)
-const previewCache = new Map(); // groupId -> { thumbDataUrl, pathPoints, status }
-let previewObserver = null;
-const previewQueue = [];
-let previewInFlight = 0;
-const MAX_PREVIEW_CONCURRENCY = 1;
+// Preview pipeline state now lives in state.previews
 
 // Sentry event metadata (event.json)
 // Keyed by `${tag}/${eventId}` (e.g. `SentryClips/2025-12-11_17-58-00`)
 const eventMetaByKey = new Map(); // key -> parsed JSON object
-let openEventGroupId = null;
 
-// Sentry collection mode (Option A)
-// When active, progress bar represents milliseconds from the collection start (not frame indices).
-let collectionState = null; // { id, key, tag, eventId, groups, durationMs, segmentStartsMs, anchorMs, anchorGroupId, currentSegmentIdx, currentGroupId, currentLocalFrameIdx, loadToken }
+// Sentry collection mode state now lives in state.collection.active
 
 // DOM Elements
 const $ = id => document.getElementById(id);
@@ -166,43 +126,38 @@ const MPS_TO_MPH = 2.23694;
     };
 
     // Panel layout mode (floating/docked/collapsed)
-    initClipsPanelMode();
-    clipsDockToggleBtn.onclick = (e) => {
-        e.preventDefault();
-        toggleDockMode();
-    };
-    clipsCollapseBtn.onclick = (e) => {
-        e.preventDefault();
-        toggleCollapsedMode();
-    };
+    const panelMode = createClipsPanelMode({ map, clipsDockToggleBtn, clipsCollapseBtn });
+    panelMode.initClipsPanelMode();
+    clipsDockToggleBtn.onclick = (e) => { e.preventDefault(); panelMode.toggleDockMode(); };
+    clipsCollapseBtn.onclick = (e) => { e.preventDefault(); panelMode.toggleCollapsedMode(); };
 
     cameraSelect.onchange = () => {
-        const g = selectedGroupId ? clipGroupById.get(selectedGroupId) : null;
+        const g = selection.selectedGroupId ? library.clipGroupById.get(selection.selectedGroupId) : null;
         if (!g) return;
 
-        if (multiCamEnabled) {
+        if (multi.enabled) {
             // In multi-cam, the dropdown selects the master camera (telemetry + timeline).
-            masterCamera = cameraSelect.value;
+            multi.masterCamera = cameraSelect.value;
             reloadSelectedGroup();
         } else {
-            selectedCamera = cameraSelect.value;
-            loadClipGroupCamera(g, selectedCamera);
+            selection.selectedCamera = cameraSelect.value;
+            loadClipGroupCamera(g, selection.selectedCamera);
         }
     };
 
     multiCamToggle.onchange = () => {
-        multiCamEnabled = !!multiCamToggle.checked;
-        localStorage.setItem(MULTI_ENABLED_KEY, multiCamEnabled ? '1' : '0');
-        if (multiLayoutSelect) multiLayoutSelect.disabled = !multiCamEnabled;
+        multi.enabled = !!multiCamToggle.checked;
+        localStorage.setItem(MULTI_ENABLED_KEY, multi.enabled ? '1' : '0');
+        if (multiLayoutSelect) multiLayoutSelect.disabled = !multi.enabled;
         reloadSelectedGroup();
     };
 
     // Multi-cam layout preset
-    multiLayoutId = localStorage.getItem(MULTI_LAYOUT_KEY) || 'fb_lr';
+    multi.layoutId = localStorage.getItem(MULTI_LAYOUT_KEY) || DEFAULT_MULTI_LAYOUT;
     if (multiLayoutSelect) {
-        multiLayoutSelect.value = multiLayoutId;
+        multiLayoutSelect.value = multi.layoutId;
         multiLayoutSelect.onchange = () => {
-            setMultiLayout(multiLayoutSelect.value || 'fb_lr');
+            setMultiLayout(multiLayoutSelect.value || DEFAULT_MULTI_LAYOUT);
         };
     }
 
@@ -224,27 +179,52 @@ const MPS_TO_MPH = 2.23694;
 
     // Multi-cam enabled preference (default ON if no prior preference)
     const savedMulti = localStorage.getItem(MULTI_ENABLED_KEY);
-    multiCamEnabled = savedMulti == null ? !!multiCamToggle?.checked : savedMulti === '1';
-    if (multiCamToggle) multiCamToggle.checked = multiCamEnabled;
-    if (multiLayoutSelect) multiLayoutSelect.disabled = !multiCamEnabled;
+    multi.enabled = savedMulti == null ? !!multiCamToggle?.checked : savedMulti === '1';
+    if (multiCamToggle) multiCamToggle.checked = multi.enabled;
+    if (multiLayoutSelect) multiLayoutSelect.disabled = !multi.enabled;
 })();
 
+// -------------------------------------------------------------
+// Explicit mode transitions
+// -------------------------------------------------------------
+
+function setMode(nextMode) {
+    const normalized = (nextMode === 'collection') ? 'collection' : 'clip';
+    if (state.mode === normalized) return;
+
+    // Stop playback timers and prevent overlapping loops across transitions.
+    pause();
+
+    // Close transient UI.
+    closeEventPopout();
+    clearMultiFocus();
+
+    // Clear mode-specific state.
+    if (normalized === 'clip') {
+        state.collection.active = null;
+    } else {
+        selection.selectedGroupId = null;
+    }
+
+    state.mode = normalized;
+}
+
 function setMultiLayout(layoutId) {
-    const next = MULTI_LAYOUTS[layoutId] ? layoutId : 'fb_lr';
-    multiLayoutId = next;
+    const next = MULTI_LAYOUTS[layoutId] ? layoutId : DEFAULT_MULTI_LAYOUT;
+    multi.layoutId = next;
     localStorage.setItem(MULTI_LAYOUT_KEY, next);
     if (multiLayoutSelect) multiLayoutSelect.value = next;
     updateMultiLayoutButtons();
-    if (multiCamEnabled) reloadSelectedGroup();
+    if (multi.enabled) reloadSelectedGroup();
 }
 
 function updateMultiLayoutButtons() {
-    if (layoutBtnFbLr) layoutBtnFbLr.classList.toggle('active', multiLayoutId === 'fb_lr');
-    if (layoutBtnFbRl) layoutBtnFbRl.classList.toggle('active', multiLayoutId === 'fb_rl');
+    if (layoutBtnFbLr) layoutBtnFbLr.classList.toggle('active', multi.layoutId === 'fb_lr');
+    if (layoutBtnFbRl) layoutBtnFbRl.classList.toggle('active', multi.layoutId === 'fb_rl');
 }
 
 function clearMultiFocus() {
-    multiFocusSlot = null;
+    state.ui.multiFocusSlot = null;
     if (!multiCamGrid) return;
     multiCamGrid.classList.remove('focused');
     multiCamGrid.removeAttribute('data-focus-slot');
@@ -252,71 +232,16 @@ function clearMultiFocus() {
 
 function toggleMultiFocus(slot) {
     if (!multiCamGrid) return;
-    if (multiFocusSlot === slot) {
+    if (state.ui.multiFocusSlot === slot) {
         clearMultiFocus();
         return;
     }
-    multiFocusSlot = slot;
+    state.ui.multiFocusSlot = slot;
     multiCamGrid.classList.add('focused');
     multiCamGrid.setAttribute('data-focus-slot', slot);
 }
 
-// -------------------------------------------------------------
-// Clips panel mode (floating / docked / collapsed)
-// -------------------------------------------------------------
-
-const CLIPS_MODE_KEY = 'teslareplay.ui.clipsMode';
-const CLIPS_PREV_MODE_KEY = 'teslareplay.ui.clipsPrevMode';
-
-function initClipsPanelMode() {
-    const saved = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
-    applyClipsMode(saved);
-}
-
-function applyClipsMode(mode) {
-    const m = (mode === 'docked' || mode === 'collapsed') ? mode : 'floating';
-    document.body.classList.remove('clips-mode-floating', 'clips-mode-docked', 'clips-mode-collapsed');
-    document.body.classList.add(`clips-mode-${m}`);
-    localStorage.setItem(CLIPS_MODE_KEY, m);
-
-    if (clipsDockToggleBtn) {
-        const isDocked = (m === 'docked');
-        clipsDockToggleBtn.title = isDocked ? 'Float panel' : 'Dock panel';
-        clipsDockToggleBtn.setAttribute('aria-label', isDocked ? 'Float panel' : 'Dock panel');
-    }
-    if (clipsCollapseBtn) {
-        const isCollapsed = (m === 'collapsed');
-        clipsCollapseBtn.title = isCollapsed ? 'Expand panel' : 'Collapse panel';
-        clipsCollapseBtn.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
-    }
-
-    // Leaflet sometimes needs a nudge when UI moves around.
-    if (map) setTimeout(() => { try { map.invalidateSize(); } catch { } }, 150);
-}
-
-function toggleDockMode() {
-    const current = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
-    if (current === 'collapsed') {
-        // Expand to previous mode first, then toggle dock.
-        const prev = localStorage.getItem(CLIPS_PREV_MODE_KEY) || 'floating';
-        const base = (prev === 'docked') ? 'docked' : 'floating';
-        localStorage.setItem(CLIPS_MODE_KEY, base);
-        applyClipsMode(base === 'docked' ? 'floating' : 'docked');
-        return;
-    }
-    applyClipsMode(current === 'docked' ? 'floating' : 'docked');
-}
-
-function toggleCollapsedMode() {
-    const current = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
-    if (current === 'collapsed') {
-        const prev = localStorage.getItem(CLIPS_PREV_MODE_KEY) || 'floating';
-        applyClipsMode(prev);
-        return;
-    }
-    localStorage.setItem(CLIPS_PREV_MODE_KEY, current);
-    applyClipsMode('collapsed');
-}
+// Clips panel mode logic moved to src/panelMode.js
 
 // Drag & Drop Logic for Floating Vis
 let isDragging = false;
@@ -437,13 +362,16 @@ async function handleFile(file) {
         return;
     }
 
+    // Any direct MP4 load implies clip mode.
+    setMode('clip');
+
     // Leaving folder mode? Keep clip list, but update subtitle.
-    clipBrowserSubtitle.textContent = selectedGroupId ? clipBrowserSubtitle.textContent : 'Single MP4 loaded';
-    folderLabel = folderLabel || null;
+    clipBrowserSubtitle.textContent = selection.selectedGroupId ? clipBrowserSubtitle.textContent : 'Single MP4 loaded';
+    library.folderLabel = library.folderLabel || null;
 
     // Reset state
     pause();
-    if (decoder) { try { decoder.close(); } catch { } decoder = null; }
+    if (player.decoder) { try { player.decoder.close(); } catch { } player.decoder = null; }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // UI Reset
@@ -455,8 +383,8 @@ async function handleFile(file) {
 
     try {
         // If multi-cam is enabled and a group is selected, route through multi loader instead.
-        if (multiCamEnabled && selectedGroupId) {
-            const g = clipGroupById.get(selectedGroupId);
+        if (multi.enabled && selection.selectedGroupId) {
+            const g = library.clipGroupById.get(selection.selectedGroupId);
             if (g) {
                 await loadMultiCamGroup(g, { configureTimeline: true, deferRender: false, autoplay: !!autoplayToggle?.checked });
                 return;
@@ -465,17 +393,17 @@ async function handleFile(file) {
 
         await loadMp4IntoPlayer(file);
         
-        firstKeyframe = frames.findIndex(f => f.keyframe);
-        if (firstKeyframe === -1) throw new Error('No keyframes found in MP4');
+        player.firstKeyframe = player.frames.findIndex(f => f.keyframe);
+        if (player.firstKeyframe === -1) throw new Error('No keyframes found in MP4');
 
-        const config = mp4.getConfig();
+        const config = player.mp4.getConfig();
         canvas.width = config.width;
         canvas.height = config.height;
         
         // Setup Progress Bar
         progressBar.min = 0;
-        progressBar.max = frames.length - 1;
-        progressBar.value = firstKeyframe;
+        progressBar.max = player.frames.length - 1;
+        progressBar.value = player.firstKeyframe;
         progressBar.step = 1;
         
         // Map Setup
@@ -486,7 +414,7 @@ async function handleFile(file) {
             
             // Extract all coordinates for path
             // This might be heavy for long videos, but standard clips are 1 min ~ 1800-3600 frames. Fine.
-            mapPath = frames
+            mapPath = player.frames
                 .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
                 .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
 
@@ -506,7 +434,7 @@ async function handleFile(file) {
         progressBar.disabled = false;
         dashboardVis.classList.add('visible');
         
-        showFrame(firstKeyframe);
+        showFrame(player.firstKeyframe);
 
         // Autoplay if enabled
         if (autoplayToggle?.checked) {
@@ -522,13 +450,13 @@ async function handleFile(file) {
 
 async function loadMp4IntoPlayer(file) {
     const buffer = await file.arrayBuffer();
-    mp4 = new DashcamMP4(buffer);
-    frames = mp4.parseFrames(seiType);
-    return { mp4, frames };
+    player.mp4 = new DashcamMP4(buffer);
+    player.frames = player.mp4.parseFrames(seiType);
+    return { mp4: player.mp4, frames: player.frames };
 }
 
 function isMultiCamActive() {
-    return multiCamEnabled && Array.from(multiStreams.values()).some(s => s.frames?.length);
+    return multi.enabled && Array.from(multi.streams.values()).some(s => s.frames?.length);
 }
 
 function setMultiCamGridVisible(visible) {
@@ -540,27 +468,27 @@ function setMultiCamGridVisible(visible) {
 }
 
 function resetMultiStreams() {
-    for (const s of multiStreams.values()) {
+    for (const s of multi.streams.values()) {
         try { s.decoder?.close?.(); } catch { /* ignore */ }
     }
-    multiStreams.clear();
+    multi.streams.clear();
 }
 
 async function reloadSelectedGroup() {
-    const g = selectedGroupId ? clipGroupById.get(selectedGroupId) : null;
+    const g = selection.selectedGroupId ? library.clipGroupById.get(selection.selectedGroupId) : null;
     if (!g) {
         setMultiCamGridVisible(false);
         return;
     }
 
     pause();
-    if (multiCamEnabled) {
+    if (multi.enabled) {
         await loadMultiCamGroup(g, { configureTimeline: true, deferRender: false, autoplay: !!autoplayToggle?.checked });
     } else {
         setMultiCamGridVisible(false);
         updateCameraSelect(g);
-        const cam = selectedCamera || (g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front'));
-        selectedCamera = cam;
+        const cam = selection.selectedCamera || (g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front'));
+        selection.selectedCamera = cam;
         cameraSelect.value = cam;
         loadClipGroupCamera(g, cam);
     }
@@ -624,7 +552,7 @@ async function loadMultiCamGroup(group, opts = {}) {
     clearMultiFocus();
 
     // Build streams for UI slots (TL/TR/BL/BR) using the selected layout.
-    const layout = MULTI_LAYOUTS[multiLayoutId] || MULTI_LAYOUTS.fb_lr;
+    const layout = MULTI_LAYOUTS[multi.layoutId] || MULTI_LAYOUTS.fb_lr;
     const slotCanvases = {
         tl: canvasFront,
         tr: canvasRight,
@@ -645,7 +573,7 @@ async function loadMultiCamGroup(group, opts = {}) {
         const cEl = slotCanvases[sdef.slot];
         const stream = buildStream(sdef.camera, cEl);
         stream.slot = sdef.slot;
-        multiStreams.set(sdef.slot, stream);
+        multi.streams.set(sdef.slot, stream);
         if (stream.ctx) {
             stream.ctx.fillStyle = '#000';
             stream.ctx.fillRect(0, 0, cEl.width || 1, cEl.height || 1);
@@ -653,26 +581,26 @@ async function loadMultiCamGroup(group, opts = {}) {
     }
 
     // Choose master camera (prefer front if available)
-    if (!group.filesByCamera.has(masterCamera)) {
-        masterCamera = group.filesByCamera.has('front') ? 'front' : (group.filesByCamera.keys().next().value || 'front');
+    if (!group.filesByCamera.has(multi.masterCamera)) {
+        multi.masterCamera = group.filesByCamera.has('front') ? 'front' : (group.filesByCamera.keys().next().value || 'front');
     }
 
     // Update camera selector to reflect "master camera" choice in multi mode
     updateCameraSelect(group);
-    cameraSelect.value = masterCamera;
+    cameraSelect.value = multi.masterCamera;
 
     // Load buffers + parse frames
     // - Master camera: parse with SEI for dashboard/map
     // - Other cameras: parse without SEI for speed
     const loadPromises = [];
-    for (const stream of multiStreams.values()) {
+    for (const stream of multi.streams.values()) {
         const entry = group.filesByCamera.get(stream.camera);
         if (!entry?.file) continue;
         stream.file = entry.file;
         loadPromises.push((async () => {
             stream.buffer = await entry.file.arrayBuffer();
             const mp4Obj = new DashcamMP4(stream.buffer);
-            const isMaster = stream.camera === masterCamera;
+            const isMaster = stream.camera === multi.masterCamera;
             const framesArr = mp4Obj.parseFrames(isMaster ? seiType : null);
             streamSetFrames(stream, mp4Obj, framesArr, isMaster);
         })());
@@ -680,32 +608,32 @@ async function loadMultiCamGroup(group, opts = {}) {
     await Promise.all(loadPromises);
 
     // If the master camera wasn't in the grid map (e.g. unknown camera name), ensure we have a master stream anyway.
-    const hasMaster = Array.from(multiStreams.values()).some(s => s.camera === masterCamera && s.frames?.length);
+    const hasMaster = Array.from(multi.streams.values()).some(s => s.camera === multi.masterCamera && s.frames?.length);
     if (!hasMaster) {
-        const entry = group.filesByCamera.get(masterCamera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
+        const entry = group.filesByCamera.get(multi.masterCamera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
         if (entry?.file) {
-            const temp = buildStream(masterCamera, canvasFront);
+            const temp = buildStream(multi.masterCamera, canvasFront);
             temp.file = entry.file;
             temp.buffer = await entry.file.arrayBuffer();
             const mp4Obj = new DashcamMP4(temp.buffer);
             const framesArr = mp4Obj.parseFrames(seiType);
             streamSetFrames(temp, mp4Obj, framesArr, true);
-            multiStreams.set('__master__', temp);
+            multi.streams.set('__master__', temp);
         }
     }
 
     // Promote master stream into existing single-player globals (dashboard/map/timeline reuse)
-    const mStream = Array.from(multiStreams.values()).find(s => s.camera === masterCamera && s.frames?.length) || multiStreams.get('__master__');
+    const mStream = Array.from(multi.streams.values()).find(s => s.camera === multi.masterCamera && s.frames?.length) || multi.streams.get('__master__');
     if (!mStream?.frames?.length) throw new Error('Master camera failed to load');
-    mp4 = mStream.mp4;
-    frames = mStream.frames;
-    firstKeyframe = mStream.firstKeyframe;
+    player.mp4 = mStream.mp4;
+    player.frames = mStream.frames;
+    player.firstKeyframe = mStream.firstKeyframe;
 
     // UI reset similar to handleFile
     if (!keepPlaying) pause();
-    if (decoder) { try { decoder.close(); } catch { } decoder = null; } // single decoder not used in multi mode
-    decoding = false;
-    pendingFrame = null;
+    if (player.decoder) { try { player.decoder.close(); } catch { } player.decoder = null; } // single decoder not used in multi mode
+    player.decoding = false;
+    player.pendingFrame = null;
     playBtn.disabled = false;
     progressBar.disabled = false;
     dashboardVis.classList.add('visible');
@@ -714,9 +642,9 @@ async function loadMultiCamGroup(group, opts = {}) {
     if (configureTimeline) {
         // Setup progress bar with master timeline
         progressBar.min = 0;
-        progressBar.max = frames.length - 1;
-        masterTimeIndex = Math.max(firstKeyframe, 0);
-        progressBar.value = masterTimeIndex;
+        progressBar.max = player.frames.length - 1;
+        multi.masterTimeIndex = Math.max(player.firstKeyframe, 0);
+        progressBar.value = multi.masterTimeIndex;
         progressBar.step = 1;
     }
 
@@ -725,7 +653,7 @@ async function loadMultiCamGroup(group, opts = {}) {
         mapPath = [];
         if (mapMarker) { mapMarker.remove(); mapMarker = null; }
         if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
-        mapPath = frames
+        mapPath = player.frames
             .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
             .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
         if (mapPath.length > 0) {
@@ -742,7 +670,7 @@ async function loadMultiCamGroup(group, opts = {}) {
 
     if (!deferRender) {
         // Draw initial frame on all cameras
-        const idx = configureTimeline ? masterTimeIndex : Math.max(firstKeyframe, 0);
+        const idx = configureTimeline ? multi.masterTimeIndex : Math.max(player.firstKeyframe, 0);
         showFrame(idx);
     }
 
@@ -848,7 +776,7 @@ function buildDisplayItems() {
     const items = [];
     const sentryBuckets = new Map(); // key `${tag}/${eventId}` -> groups[]
 
-    for (const g of clipGroups) {
+    for (const g of library.clipGroups) {
         if (g.tag?.toLowerCase() === 'sentryclips' && g.eventId) {
             const key = `${g.tag}/${g.eventId}`;
             if (!sentryBuckets.has(key)) sentryBuckets.set(key, []);
@@ -1012,24 +940,24 @@ function handleFolderFiles(fileList, directoryName = null) {
 
     // Build index
     const built = buildTeslaCamIndex(files, directoryName);
-    clipGroups = built.groups;
-    clipGroupById = new Map(clipGroups.map(g => [g.id, g]));
-    folderLabel = built.inferredRoot || directoryName || 'Folder';
+    library.clipGroups = built.groups;
+    library.clipGroupById = new Map(library.clipGroups.map(g => [g.id, g]));
+    library.folderLabel = built.inferredRoot || directoryName || 'Folder';
 
     // Reset selection + previews
-    selectedGroupId = null;
-    collectionState = null;
-    previewCache.clear();
-    previewQueue.length = 0;
-    previewInFlight = 0;
-    openEventGroupId = null;
+    selection.selectedGroupId = null;
+    state.collection.active = null;
+    previews.cache.clear();
+    previews.queue.length = 0;
+    previews.inFlight = 0;
+    state.ui.openEventRowId = null;
 
     // Update UI
-    clipBrowserSubtitle.textContent = `${folderLabel}: ${clipGroups.length} clip group${clipGroups.length === 1 ? '' : 's'}`;
+    clipBrowserSubtitle.textContent = `${library.folderLabel}: ${library.clipGroups.length} clip group${library.clipGroups.length === 1 ? '' : 's'}`;
     renderClipList();
 
     // Autoselect first item (most recent): could be a Sentry collection or a normal clip group
-    if (clipGroups.length) {
+    if (library.clipGroups.length) {
         const items = buildDisplayItems();
         const first = items[0];
         if (first?.type === 'collection') selectSentryCollection(first.id);
@@ -1045,11 +973,11 @@ function handleFolderFiles(fileList, directoryName = null) {
 
 function renderClipList() {
     clipList.innerHTML = '';
-    if (!clipGroups.length) return;
+    if (!library.clipGroups.length) return;
 
-    if (previewObserver) {
-        try { previewObserver.disconnect(); } catch { /* ignore */ }
-        previewObserver = null;
+    if (previews.observer) {
+        try { previews.observer.disconnect(); } catch { /* ignore */ }
+        previews.observer = null;
     }
 
     const items = buildDisplayItems();
@@ -1151,7 +1079,7 @@ function renderClipList() {
     }
 
     // Setup (or refresh) IntersectionObserver for lazy previews
-    previewObserver = new IntersectionObserver((entries) => {
+    previews.observer = new IntersectionObserver((entries) => {
         for (const entry of entries) {
             if (!entry.isIntersecting) continue;
             const el = entry.target;
@@ -1164,38 +1092,38 @@ function renderClipList() {
     }, { root: clipList, threshold: 0.2 });
 
     for (const el of clipList.querySelectorAll('.clip-item')) {
-        previewObserver.observe(el);
+        previews.observer.observe(el);
     }
     highlightSelectedClip();
 }
 
 // Close event popout when clicking elsewhere
 document.addEventListener('click', (e) => {
-    if (!openEventGroupId) return;
-    const openEl = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
-    if (!openEl) { openEventGroupId = null; return; }
+    if (!state.ui.openEventRowId) return;
+    const openEl = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(state.ui.openEventRowId)}"]`);
+    if (!openEl) { state.ui.openEventRowId = null; return; }
     if (openEl.contains(e.target)) return;
     closeEventPopout();
 });
 
 function closeEventPopout() {
-    if (!openEventGroupId) return;
-    const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
+    if (!state.ui.openEventRowId) return;
+    const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(state.ui.openEventRowId)}"]`);
     if (el) el.classList.remove('event-open');
-    openEventGroupId = null;
+    state.ui.openEventRowId = null;
 }
 
 function toggleEventPopout(rowId, metaOverride = null) {
-    if (openEventGroupId && openEventGroupId !== rowId) closeEventPopout();
+    if (state.ui.openEventRowId && state.ui.openEventRowId !== rowId) closeEventPopout();
     const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(rowId)}"]`);
     if (!el) return;
     const opening = !el.classList.contains('event-open');
     if (!opening) { closeEventPopout(); return; }
 
-    const meta = metaOverride ?? (clipGroupById.get(rowId)?.eventMeta || null);
+    const meta = metaOverride ?? (library.clipGroupById.get(rowId)?.eventMeta || null);
     populateEventPopout(el, meta);
     el.classList.add('event-open');
-    openEventGroupId = rowId;
+    state.ui.openEventRowId = rowId;
 }
 
 function populateEventPopout(rowEl, meta) {
@@ -1232,25 +1160,25 @@ function populateEventPopout(rowEl, meta) {
 
 function highlightSelectedClip() {
     for (const el of clipList.querySelectorAll('.clip-item')) {
-        el.classList.toggle('selected', el.dataset.groupid === selectedGroupId || el.dataset.groupid === collectionState?.id);
+        el.classList.toggle('selected', el.dataset.groupid === selection.selectedGroupId || el.dataset.groupid === state.collection.active?.id);
     }
 }
 
 function selectClipGroup(groupId) {
-    const g = clipGroupById.get(groupId);
+    const g = library.clipGroupById.get(groupId);
     if (!g) return;
-    collectionState = null;
-    selectedGroupId = groupId;
+    setMode('clip');
+    selection.selectedGroupId = groupId;
     highlightSelectedClip();
     progressBar.step = 1;
 
     // Choose default camera/master: front preferred, else first available
     const defaultCam = g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front');
-    selectedCamera = defaultCam;
-    masterCamera = masterCamera || defaultCam;
-    if (!g.filesByCamera.has(masterCamera)) masterCamera = defaultCam;
+    selection.selectedCamera = defaultCam;
+    multi.masterCamera = multi.masterCamera || defaultCam;
+    if (!g.filesByCamera.has(multi.masterCamera)) multi.masterCamera = defaultCam;
     updateCameraSelect(g);
-    cameraSelect.value = multiCamEnabled ? masterCamera : selectedCamera;
+    cameraSelect.value = multi.enabled ? multi.masterCamera : selection.selectedCamera;
     reloadSelectedGroup();
 
     // Kick off preview for this group immediately
@@ -1263,11 +1191,11 @@ function selectSentryCollection(collectionId) {
     if (!it) return;
 
     const c = it.collection;
-    selectedGroupId = null;
+    setMode('collection');
     // Ensure a clean start. If we came from an actively playing clip, segment loading clears timers,
     // which can leave playing=true but no timer loop. Pause first so autoplay can reliably start.
     pause();
-    collectionState = {
+    state.collection.active = {
         ...c,
         currentSegmentIdx: -1,
         currentGroupId: null,
@@ -1278,16 +1206,16 @@ function selectSentryCollection(collectionId) {
 
     // Configure progress bar as millisecond timeline.
     progressBar.min = 0;
-    progressBar.max = Math.floor(collectionState.durationMs);
+    progressBar.max = Math.floor(state.collection.active.durationMs);
     // Keep step=1 so playback can advance smoothly (Safari may snap programmatic values to step).
     // User scrubs are quantized in the oninput handler.
     progressBar.step = 1;
-    progressBar.value = Math.floor(collectionState.anchorMs ?? 0);
+    progressBar.value = Math.floor(state.collection.active.anchorMs ?? 0);
     playBtn.disabled = false;
     progressBar.disabled = false;
 
     // Load at anchor (event time) if known, else start.
-    const startMs = collectionState.anchorMs ?? 0;
+    const startMs = state.collection.active.anchorMs ?? 0;
     showCollectionAtMs(startMs).then(() => {
         if (autoplayToggle?.checked) setTimeout(() => play(), 0);
     }).catch(() => { /* ignore */ });
@@ -1308,7 +1236,7 @@ function updateCameraSelect(group) {
         cameraSelect.appendChild(opt);
     }
     cameraSelect.disabled = cameraSelect.options.length === 0;
-    cameraSelect.value = selectedCamera;
+    cameraSelect.value = selection.selectedCamera;
 }
 
 async function ingestSentryEventJson(eventAssetsByKey) {
@@ -1321,14 +1249,14 @@ async function ingestSentryEventJson(eventAssetsByKey) {
             eventMetaByKey.set(key, meta);
             // Attach meta to all groups in the same Sentry event folder
             const [tag, eventId] = key.split('/');
-            for (const g of clipGroups) {
+            for (const g of library.clipGroups) {
                 if (g.tag === tag && g.eventId === eventId) g.eventMeta = meta;
             }
             // Re-render list so Sentry collections can show event marker + updated details.
             renderClipList();
             // If an event popout is currently open, refresh its contents.
-            if (openEventGroupId) {
-                const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
+            if (state.ui.openEventRowId) {
+                const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(state.ui.openEventRowId)}"]`);
                 if (el?.classList?.contains('event-open')) populateEventPopout(el, meta);
             }
         } catch { /* ignore parse errors */ }
@@ -1353,9 +1281,9 @@ async function loadSingleGroup(group, camera, opts = {}) {
 
     // Reset state (similar to handleFile, but optionally skip timeline configuration)
     if (!keepPlaying) pause();
-    if (decoder) { try { decoder.close(); } catch { } decoder = null; }
-    decoding = false;
-    pendingFrame = null;
+    if (player.decoder) { try { player.decoder.close(); } catch { } player.decoder = null; }
+    player.decoding = false;
+    player.pendingFrame = null;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     dropOverlay.classList.add('hidden');
@@ -1365,17 +1293,17 @@ async function loadSingleGroup(group, camera, opts = {}) {
     progressBar.disabled = true;
 
     await loadMp4IntoPlayer(entry.file);
-    firstKeyframe = frames.findIndex(f => f.keyframe);
-    if (firstKeyframe === -1) throw new Error('No keyframes found in MP4');
+    player.firstKeyframe = player.frames.findIndex(f => f.keyframe);
+    if (player.firstKeyframe === -1) throw new Error('No keyframes found in MP4');
 
-    const config = mp4.getConfig();
+    const config = player.mp4.getConfig();
     canvas.width = config.width;
     canvas.height = config.height;
 
     if (configureTimeline) {
         progressBar.min = 0;
-        progressBar.max = frames.length - 1;
-        progressBar.value = Math.max(firstKeyframe, 0);
+        progressBar.max = player.frames.length - 1;
+        progressBar.value = Math.max(player.firstKeyframe, 0);
     }
 
     // Map setup (segment only)
@@ -1384,7 +1312,7 @@ async function loadSingleGroup(group, camera, opts = {}) {
         if (mapMarker) { mapMarker.remove(); mapMarker = null; }
         if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
 
-        mapPath = frames
+        mapPath = player.frames
             .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
             .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
 
@@ -1403,19 +1331,19 @@ async function loadSingleGroup(group, camera, opts = {}) {
     dashboardVis.classList.add('visible');
 
     if (!deferRender) {
-        showFrame(Math.max(firstKeyframe, 0));
+        showFrame(Math.max(player.firstKeyframe, 0));
     }
     if (doAutoplay) setTimeout(() => play(), 0);
 }
 
 function ensureGroupPreview(groupId, opts = {}) {
-    const existing = previewCache.get(groupId);
+    const existing = previews.cache.get(groupId);
     if (existing?.status === 'ready' || existing?.status === 'loading') return;
-    previewCache.set(groupId, { status: 'queued' });
+    previews.cache.set(groupId, { status: 'queued' });
 
     const task = async () => {
-        previewCache.set(groupId, { ...(previewCache.get(groupId) || {}), status: 'loading' });
-        const group = clipGroupById.get(groupId);
+        previews.cache.set(groupId, { ...(previews.cache.get(groupId) || {}), status: 'loading' });
+        const group = library.clipGroupById.get(groupId);
         if (!group) return;
 
         // choose best file for preview: front preferred
@@ -1455,31 +1383,31 @@ function ensureGroupPreview(groupId, opts = {}) {
             } catch { /* ignore */ }
         }
 
-        previewCache.set(groupId, { status: 'ready', thumbDataUrl, pathPoints });
+        previews.cache.set(groupId, { status: 'ready', thumbDataUrl, pathPoints });
         applyGroupPreviewToRow(groupId);
     };
 
-    if (opts.highPriority) previewQueue.unshift(task);
-    else previewQueue.push(task);
+    if (opts.highPriority) previews.queue.unshift(task);
+    else previews.queue.push(task);
     pumpPreviewQueue();
 }
 
 function pumpPreviewQueue() {
-    while (previewInFlight < MAX_PREVIEW_CONCURRENCY && previewQueue.length) {
-        const task = previewQueue.shift();
-        previewInFlight++;
+    while (previews.inFlight < previews.maxConcurrency && previews.queue.length) {
+        const task = previews.queue.shift();
+        previews.inFlight++;
         Promise.resolve()
             .then(task)
             .catch(() => { })
             .finally(() => {
-                previewInFlight--;
+                previews.inFlight--;
                 pumpPreviewQueue();
             });
     }
 }
 
 function applyGroupPreviewToRow(groupId) {
-    const preview = previewCache.get(groupId);
+    const preview = previews.cache.get(groupId);
     if (!preview || preview.status !== 'ready') return;
 
     // Update any row that directly represents this group OR any collection row that references it as its preview group.
@@ -1667,38 +1595,22 @@ async function captureWebcodecsThumbnailFromMp4Buffer(buffer, width, height) {
     return canvasEl.toDataURL('image/jpeg', 0.72);
 }
 
-function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-    }[c]));
-}
-
-function cssEscape(s) {
-    if (window.CSS?.escape) return window.CSS.escape(String(s));
-    // minimal escape for attribute selector usage
-    return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
+// escapeHtml/cssEscape moved to src/utils.js
 
 // Playback Logic
-playBtn.onclick = () => playing ? pause() : play();
-let isScrubbing = false;
-let collectionScrubPreviewTimer = null;
+playBtn.onclick = () => player.playing ? pause() : play();
 function previewAtSliderValue() {
     pause();
-    if (collectionState) {
+    if (state.collection.active) {
         // Keep step=1 for playback smoothness, but quantize user scrubs to reduce segment churn.
         const quantum = 100; // ms
         const raw = +progressBar.value || 0;
         const snapped = Math.round(raw / quantum) * quantum;
         progressBar.value = String(snapped);
         // Debounce heavy segment loads while dragging to avoid black frames and decoder churn.
-        if (collectionScrubPreviewTimer) clearTimeout(collectionScrubPreviewTimer);
-        collectionScrubPreviewTimer = setTimeout(() => {
-            collectionScrubPreviewTimer = null;
+        if (state.ui.collectionScrubPreviewTimer) clearTimeout(state.ui.collectionScrubPreviewTimer);
+        state.ui.collectionScrubPreviewTimer = setTimeout(() => {
+            state.ui.collectionScrubPreviewTimer = null;
             showCollectionAtMs(snapped);
         }, 120);
     } else {
@@ -1709,7 +1621,7 @@ function previewAtSliderValue() {
 function maybeAutoplayAfterSeek() {
     if (!autoplayToggle?.checked) return;
     // If the user is still dragging, don't restart yet.
-    if (isScrubbing) return;
+    if (state.ui.isScrubbing) return;
     setTimeout(() => play(), 0);
 }
 
@@ -1720,10 +1632,10 @@ progressBar.addEventListener('input', () => {
 
 // Commit when the user releases the slider (click or drag end)
 progressBar.addEventListener('change', () => {
-    isScrubbing = false;
-    if (collectionScrubPreviewTimer) { clearTimeout(collectionScrubPreviewTimer); collectionScrubPreviewTimer = null; }
+    state.ui.isScrubbing = false;
+    if (state.ui.collectionScrubPreviewTimer) { clearTimeout(state.ui.collectionScrubPreviewTimer); state.ui.collectionScrubPreviewTimer = null; }
     // For collections: do the final seek immediately on release (not debounced).
-    if (collectionState) {
+    if (state.collection.active) {
         pause();
         const quantum = 100;
         const raw = +progressBar.value || 0;
@@ -1735,27 +1647,27 @@ progressBar.addEventListener('change', () => {
     previewAtSliderValue();
     maybeAutoplayAfterSeek();
 });
-progressBar.addEventListener('pointerdown', () => { isScrubbing = true; });
-progressBar.addEventListener('pointerup', () => { isScrubbing = false; maybeAutoplayAfterSeek(); });
-progressBar.addEventListener('pointercancel', () => { isScrubbing = false; });
+progressBar.addEventListener('pointerdown', () => { state.ui.isScrubbing = true; });
+progressBar.addEventListener('pointerup', () => { state.ui.isScrubbing = false; maybeAutoplayAfterSeek(); });
+progressBar.addEventListener('pointercancel', () => { state.ui.isScrubbing = false; });
 
 // Keyboard controls
 document.addEventListener('keydown', (e) => {
-    if (!frames) return;
+    if (!player.frames && !state.collection.active) return;
     if (e.code === 'Space') {
         e.preventDefault();
-        playing ? pause() : play();
+        player.playing ? pause() : play();
     } else if (e.code === 'Escape') {
-        if (openEventGroupId) {
+        if (state.ui.openEventRowId) {
             e.preventDefault();
             closeEventPopout();
-        } else if (multiFocusSlot) {
+        } else if (state.ui.multiFocusSlot) {
             e.preventDefault();
             clearMultiFocus();
         }
     } else if (e.code === 'ArrowLeft') {
         pause();
-        if (collectionState) {
+        if (state.collection.active) {
             const prev = Math.max(0, +progressBar.value - 1000);
             progressBar.value = prev;
             showCollectionAtMs(prev);
@@ -1768,13 +1680,13 @@ document.addEventListener('keydown', (e) => {
         }
     } else if (e.code === 'ArrowRight') {
         pause();
-        if (collectionState) {
+        if (state.collection.active) {
             const next = Math.min(+progressBar.max, +progressBar.value + 1000);
             progressBar.value = next;
             showCollectionAtMs(next);
             maybeAutoplayAfterSeek();
         } else {
-            const next = Math.min(frames.length - 1, +progressBar.value + 15);
+            const next = Math.min(player.frames.length - 1, +progressBar.value + 15);
             progressBar.value = next;
             showFrame(next);
             maybeAutoplayAfterSeek();
@@ -1783,48 +1695,48 @@ document.addEventListener('keydown', (e) => {
 });
 
 function play() {
-    if (playing) return;
-    if (!frames || !frames.length) {
+    if (player.playing) return;
+    if (!player.frames || !player.frames.length) {
         // In Sentry collection mode we may not have a segment loaded yet; load it, then start.
-        if (collectionState) {
-            playing = true;
+        if (state.collection.active) {
+            player.playing = true;
             updatePlayButton();
             showCollectionAtMs(+progressBar.value || 0)
-                .then(() => { if (playing) playNext(); })
+                .then(() => { if (player.playing) playNext(); })
                 .catch(() => { pause(); });
             return;
         }
         return;
     }
-    playing = true;
+    player.playing = true;
     updatePlayButton();
     playNext();
 }
 
 function pause() {
-    playing = false;
+    player.playing = false;
     updatePlayButton();
-    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    if (player.playTimer) { clearTimeout(player.playTimer); player.playTimer = null; }
 }
 
 function updatePlayButton() {
-    playBtn.innerHTML = playing 
+    playBtn.innerHTML = player.playing 
         ? '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'
         : '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 }
 
 function playNext() {
-    if (!playing) return;
-    if (collectionState) {
+    if (!player.playing) return;
+    if (state.collection.active) {
         // Ensure we never end up with multiple timers running across segment transitions.
-        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
-        if (collectionState.loading) {
-            playTimer = setTimeout(playNext, 50);
+        if (player.playTimer) { clearTimeout(player.playTimer); player.playTimer = null; }
+        if (state.collection.active.loading) {
+            player.playTimer = setTimeout(playNext, 50);
             return;
         }
         const currentMs = +progressBar.value;
-        const idx = Math.min(Math.max(collectionState.currentLocalFrameIdx || 0, 0), (frames?.length || 1) - 1);
-        const step = frames?.[idx]?.duration || 33;
+        const idx = Math.min(Math.max(state.collection.active.currentLocalFrameIdx || 0, 0), (player.frames?.length || 1) - 1);
+        const step = player.frames?.[idx]?.duration || 33;
         const nextMs = currentMs + step;
         if (nextMs > +progressBar.max) {
             pause();
@@ -1835,16 +1747,16 @@ function playNext() {
         // This avoids a race where a segment load clears the timer before it's assigned.
         showCollectionAtMs(nextMs)
             .then(() => {
-                if (!playing) return;
+                if (!player.playing) return;
                 // If we're still loading (boundary), poll shortly; otherwise use frame duration.
-                playTimer = setTimeout(playNext, collectionState?.loading ? 50 : step);
+                player.playTimer = setTimeout(playNext, state.collection.active?.loading ? 50 : step);
             })
             .catch(() => pause());
         return;
     }
 
     let next = +progressBar.value + 1;
-    if (!frames || next >= frames.length) {
+    if (!player.frames || next >= player.frames.length) {
         pause();
         return;
     }
@@ -1852,21 +1764,21 @@ function playNext() {
     showFrame(next);
 
     // Calculate delay based on master frame duration
-    const duration = frames[next].duration || 33;
-    playTimer = setTimeout(playNext, duration);
+    const duration = player.frames[next].duration || 33;
+    player.playTimer = setTimeout(playNext, duration);
 }
 
 function showFrame(index) {
-    if (!frames[index]) return;
+    if (!player.frames?.[index]) return;
     
     // Update Vis
-    updateVisualization(frames[index].sei);
+    updateVisualization(player.frames[index].sei);
     updateTimeDisplay(index);
 
     // Decode & Render Video
     if (isMultiCamActive()) {
-        const t = frames[index].timestamp;
-        for (const stream of multiStreams.values()) {
+        const t = player.frames[index].timestamp;
+        for (const stream of multi.streams.values()) {
             if (stream.slot === '__master__') continue;
             if (!stream?.frames?.length || !stream.ctx) continue;
             const idx = findFrameIndexAtTime(stream, t);
@@ -1875,31 +1787,31 @@ function showFrame(index) {
         return;
     }
 
-    if (decoding) {
-        pendingFrame = index;
+    if (player.decoding) {
+        player.pendingFrame = index;
     } else {
         decodeFrame(index);
     }
 }
 
 function findFrameIndexAtLocalMs(localMs) {
-    if (!frames?.length) return 0;
-    let lo = 0, hi = frames.length - 1;
+    if (!player.frames?.length) return 0;
+    let lo = 0, hi = player.frames.length - 1;
     while (lo < hi) {
         const mid = Math.floor((lo + hi + 1) / 2);
-        if ((frames[mid].timestamp || 0) <= localMs) lo = mid;
+        if ((player.frames[mid].timestamp || 0) <= localMs) lo = mid;
         else hi = mid - 1;
     }
     return lo;
 }
 
 async function showCollectionAtMs(ms) {
-    if (!collectionState) return;
-    const token = ++collectionState.loadToken;
-    const clamped = Math.max(0, Math.min(collectionState.durationMs, ms));
+    if (!state.collection.active) return;
+    const token = ++state.collection.active.loadToken;
+    const clamped = Math.max(0, Math.min(state.collection.active.durationMs, ms));
 
     // Find segment index by start offsets
-    const starts = collectionState.segmentStartsMs;
+    const starts = state.collection.active.segmentStartsMs;
     let segIdx = 0;
     for (let i = 0; i < starts.length; i++) {
         if (starts[i] <= clamped) segIdx = i;
@@ -1909,38 +1821,38 @@ async function showCollectionAtMs(ms) {
     const segStart = starts[segIdx] || 0;
     const localMs = Math.max(0, clamped - segStart);
 
-    if (segIdx !== collectionState.currentSegmentIdx) {
+    if (segIdx !== state.collection.active.currentSegmentIdx) {
         await loadCollectionSegment(segIdx, token);
-        if (!collectionState || collectionState.loadToken !== token) return;
+        if (!state.collection.active || state.collection.active.loadToken !== token) return;
     }
 
     // Render the nearest frame in the current segment.
     const idx = findFrameIndexAtLocalMs(localMs);
-    collectionState.currentLocalFrameIdx = idx;
+    state.collection.active.currentLocalFrameIdx = idx;
     progressBar.value = Math.floor(clamped);
     showFrame(idx);
 }
 
 async function loadCollectionSegment(segIdx, token) {
-    if (!collectionState) return;
-    const group = collectionState.groups?.[segIdx];
+    if (!state.collection.active) return;
+    const group = state.collection.active.groups?.[segIdx];
     if (!group) return;
 
     // Prevent overlapping timers during segment transitions.
-    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
-    collectionState.loading = true;
+    if (player.playTimer) { clearTimeout(player.playTimer); player.playTimer = null; }
+    state.collection.active.loading = true;
 
-    collectionState.currentSegmentIdx = segIdx;
-    collectionState.currentGroupId = group.id;
+    state.collection.active.currentSegmentIdx = segIdx;
+    state.collection.active.currentGroupId = group.id;
 
-    if (multiCamEnabled) {
+    if (multi.enabled) {
         await loadMultiCamGroup(group, { configureTimeline: false, deferRender: true, autoplay: false, keepPlaying: true });
     } else {
-        await loadSingleGroup(group, selectedCamera || 'front', { configureTimeline: false, deferRender: true, autoplay: false, keepPlaying: true });
+        await loadSingleGroup(group, selection.selectedCamera || 'front', { configureTimeline: false, deferRender: true, autoplay: false, keepPlaying: true });
     }
 
-    if (!collectionState || collectionState.loadToken !== token) return;
-    collectionState.loading = false;
+    if (!state.collection.active || state.collection.active.loadToken !== token) return;
+    state.collection.active.loading = false;
 }
 
 function streamShowFrame(stream, index) {
@@ -2014,20 +1926,20 @@ function createChunkForStream(stream, frame) {
 }
 
 async function decodeFrame(index) {
-    decoding = true;
+    player.decoding = true;
     try {
         // Find preceding keyframe
         let keyIdx = index;
-        while (keyIdx >= 0 && !frames[keyIdx].keyframe) keyIdx--;
+        while (keyIdx >= 0 && !player.frames[keyIdx].keyframe) keyIdx--;
         if (keyIdx < 0) return; // Should not happen if firstKeyframe is correct
 
-        if (decoder) try { decoder.close(); } catch { }
+        if (player.decoder) try { player.decoder.close(); } catch { }
         
         const targetCount = index - keyIdx + 1;
         let count = 0;
 
         await new Promise((resolve, reject) => {
-            decoder = new VideoDecoder({
+            player.decoder = new VideoDecoder({
                 output: frame => {
                     count++;
                     if (count === targetCount) {
@@ -2039,17 +1951,17 @@ async function decodeFrame(index) {
                 error: reject
             });
 
-            const config = mp4.getConfig();
-            decoder.configure({
+            const config = player.mp4.getConfig();
+            player.decoder.configure({
                 codec: config.codec,
                 width: config.width,
                 height: config.height
             });
 
             for (let i = keyIdx; i <= index; i++) {
-                decoder.decode(createChunk(frames[i]));
+                player.decoder.decode(createChunk(player.frames[i]));
             }
-            decoder.flush().catch(reject);
+            player.decoder.flush().catch(reject);
         });
     } catch (e) {
         // AbortError ("Close called") is expected during rapid seeks / segment transitions.
@@ -2057,10 +1969,10 @@ async function decodeFrame(index) {
             console.error('Decode error:', e);
         }
     } finally {
-        decoding = false;
-        if (pendingFrame !== null) {
-            const next = pendingFrame;
-            pendingFrame = null;
+        player.decoding = false;
+        if (player.pendingFrame !== null) {
+            const next = player.pendingFrame;
+            player.pendingFrame = null;
             decodeFrame(next);
         }
     }
@@ -2068,7 +1980,7 @@ async function decodeFrame(index) {
 
 function createChunk(frame) {
     const sc = new Uint8Array([0, 0, 0, 1]);
-    const config = mp4.getConfig();
+    const config = player.mp4.getConfig();
     const data = frame.keyframe
         ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
         : DashcamMP4.concat(sc, frame.data);
@@ -2181,21 +2093,21 @@ function updateVisualization(sei) {
 toggleExtra.onclick = () => {
     extraDataContainer.classList.toggle('expanded');
     // Refresh data if expanding while paused
-    if (extraDataContainer.classList.contains('expanded') && frames && progressBar.value) {
-         updateVisualization(frames[+progressBar.value].sei);
+    if (extraDataContainer.classList.contains('expanded') && player.frames && progressBar.value) {
+         updateVisualization(player.frames[+progressBar.value].sei);
     }
 };
 
 function updateTimeDisplay(frameIndex) {
-    if (collectionState) {
+    if (state.collection.active) {
         const seconds = Math.floor((+progressBar.value || 0) / 1000);
         const m = Math.floor(seconds / 60).toString().padStart(2, '0');
         const s = (seconds % 60).toString().padStart(2, '0');
         timeDisplay.textContent = `${m}:${s}`;
         return;
     }
-    if (!frames || !frames[frameIndex]) return;
-    const seconds = Math.floor(frames[frameIndex].timestamp / 1000);
+    if (!player.frames || !player.frames[frameIndex]) return;
+    const seconds = Math.floor(player.frames[frameIndex].timestamp / 1000);
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
     timeDisplay.textContent = `${m}:${s}`;

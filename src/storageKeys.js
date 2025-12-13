@@ -1,0 +1,10 @@
+// Centralized storage keys for UI persistence.
+// Keeping these in one place makes future state centralization much easier.
+
+export const CLIPS_MODE_KEY = 'teslareplay.ui.clipsMode';
+export const CLIPS_PREV_MODE_KEY = 'teslareplay.ui.clipsPrevMode';
+
+export const MULTI_LAYOUT_KEY = 'teslareplay.ui.multiLayout';
+export const MULTI_ENABLED_KEY = 'teslareplay.ui.multiEnabled';
+
+
