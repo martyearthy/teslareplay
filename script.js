@@ -1101,15 +1101,35 @@ function drawMiniPath(canvasEl, points) {
         minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
     }
     const pad = 6;
-    const dx = (maxLon - minLon) || 1e-9;
     const dy = (maxLat - minLat) || 1e-9;
+
+    // Avoid stretching when the canvas is rectangular: use a uniform scale and center the path.
+    // Also compensate longitude by cos(meanLat) to reduce visual distortion at higher latitudes.
+    const meanLat = (minLat + maxLat) / 2;
+    const lonScale = Math.cos((meanLat * Math.PI) / 180) || 1;
+    const minLonAdj = minLon * lonScale;
+    const maxLonAdj = maxLon * lonScale;
+    const dx = (maxLonAdj - minLonAdj) || 1e-9;
+
+    const availW = Math.max(1, w - pad * 2);
+    const availH = Math.max(1, h - pad * 2);
+    const scale = Math.min(availW / dx, availH / dy);
+    const contentW = dx * scale;
+    const contentH = dy * scale;
+    const offX = (w - contentW) / 2;
+    const offY = (h - contentH) / 2;
+
+    const project = (lat, lon) => {
+        const x = offX + ((lon * lonScale - minLonAdj) * scale);
+        const y = offY + ((maxLat - lat) * scale);
+        return [x, y];
+    };
 
     c.strokeStyle = 'rgba(62, 156, 191, 0.95)';
     c.lineWidth = 2;
     c.beginPath();
     points.forEach(([lat, lon], idx) => {
-        const x = pad + ((lon - minLon) / dx) * (w - pad * 2);
-        const y = pad + (1 - (lat - minLat) / dy) * (h - pad * 2);
+        const [x, y] = project(lat, lon);
         if (idx === 0) c.moveTo(x, y);
         else c.lineTo(x, y);
     });
@@ -1118,10 +1138,8 @@ function drawMiniPath(canvasEl, points) {
     // start/end markers
     const [sLat, sLon] = points[0];
     const [eLat, eLon] = points[points.length - 1];
-    const sx = pad + ((sLon - minLon) / dx) * (w - pad * 2);
-    const sy = pad + (1 - (sLat - minLat) / dy) * (h - pad * 2);
-    const ex = pad + ((eLon - minLon) / dx) * (w - pad * 2);
-    const ey = pad + (1 - (eLat - minLat) / dy) * (h - pad * 2);
+    const [sx, sy] = project(sLat, sLon);
+    const [ex, ey] = project(eLat, eLon);
 
     c.fillStyle = 'rgba(255,255,255,0.9)';
     c.beginPath(); c.arc(sx, sy, 2.5, 0, Math.PI * 2); c.fill();
