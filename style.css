@@ -380,6 +380,7 @@ canvas {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
 }
 
 .badge {
@@ -396,12 +397,112 @@ canvas {
     color: rgba(255, 255, 255, 0.65);
 }
 
+/* Event popout (Sentry event.json) */
+.event-btn {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.78);
+    display: grid;
+    place-items: center;
+    padding: 0;
+    cursor: pointer;
+}
+.event-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.event-btn svg { width: 14px; height: 14px; fill: currentColor; }
+
+.event-pop {
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    width: 300px;
+    max-width: calc(100vw - 80px);
+    background: rgba(12, 12, 12, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.55);
+    z-index: 200;
+    padding: 10px;
+    display: none;
+}
+.clip-item { position: relative; } /* for pop positioning */
+.clip-item.event-open .event-pop { display: block; }
+
+.event-pop-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.event-pop-title {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+}
+.event-close {
+    width: 26px;
+    height: 26px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+}
+.event-close:hover { background: rgba(255, 255, 255, 0.08); }
+.event-kv {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 6px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11px;
+}
+.event-kv .k { color: rgba(255,255,255,0.55); }
+.event-kv .v { color: rgba(255,255,255,0.88); word-break: break-word; }
+
 .clip-sub {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.6);
     display: flex;
     flex-direction: column;
     gap: 2px;
+}
+
+/* Sentry collection marker */
+.timeline-bar {
+    margin-top: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.08);
+    position: relative;
+    overflow: hidden;
+}
+.timeline-marker {
+    position: absolute;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    transform: translate(-50%, -50%);
+    background: rgba(255, 0, 0, 0.9);
+    box-shadow: 0 0 10px rgba(255,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.35);
+}
+.timeline-marker::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 22px;
+    height: 22px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    background: rgba(255, 0, 0, 0.12);
 }
 
 /* Camera select */

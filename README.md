@@ -14,6 +14,10 @@ Original code from Tesla: https://github.com/teslamotors/dashcam
   - Drop your entire `TeslaCam/` folder (or choose it in the UI) instead of picking single files.
   - Automatically groups per-camera clips into a single “clip group” by timestamp.
   - Tags clip groups by folder (e.g. `RecentClips`, `SentryClips`, `SavedClips`) and Sentry event folder when present.
+- **Sentry Collections (Event Folder Playback)**:
+  - Sentry events are stored as folders containing multiple 1‑minute segments before/after an event timestamp.
+  - Tesla Replay can treat each Sentry event folder as a single **collection item** with “virtual playlist” playback.
+  - A red event marker shows where the `event.json.timestamp` falls within the collection timeline.
 - **Clip Browser + Previews**:
   - Sidebar clip list with **lazy** thumbnail generation and a **mini route preview** (from SEI GPS) when available.
   - Designed to scale to large folders without eagerly loading every MP4 into memory at once.
@@ -84,6 +88,27 @@ Tesla Replay includes a synced **multi-camera** mode which is ideal for reviewin
   - Click any tile to **enlarge** it.
   - Click again or press **Esc** to return to the 2×2 grid.
 
+### Sentry Collections (One Item per Event Folder)
+Tesla stores Sentry mode footage as a folder per event, with multiple clips before and after the “trigger moment”.
+
+Tesla Replay groups each Sentry event folder into a single **Sentry Collection** list item:
+
+- **What is a “collection”?**
+  - A collection is a virtual timeline over multiple 1‑minute camera segments.
+  - Playback advances through segments automatically; you may notice a small hitch at segment boundaries (expected).
+
+- **Event marker**
+  - If `event.json` is present, Tesla Replay uses `event.json.timestamp` to compute an **event position** within the collection.
+  - The clip list shows a **red dot** on a small timeline bar to indicate where the event occurs.
+
+- **Event details popout**
+  - If the Sentry folder contains `event.json`, a small info button appears on the collection row.
+  - Clicking it shows the JSON fields in a readable panel (reason/city/street/lat/lon/etc).
+  - Close with the ✕, click outside, or press `Esc`.
+
+- **Thumbnails**
+  - If `event.png` exists, Tesla Replay uses it as the collection’s thumbnail (fast + consistent).
+
 ### TeslaCam Folder Structure Notes
 Tesla Replay expects the common Tesla USB structure:
 
@@ -132,6 +157,11 @@ These modes are toggled from the panel header (Dock/Float and Collapse/Expand) a
   - Run via a local web server (see below) or use the hosted version.
 - **Clip list appears but no minimap**: Not all clips contain GPS/SEI; some may be parked clips or older firmware.
 - **Folder selection doesn’t show subfolders**: Folder picking uses `webkitdirectory` (widely supported in Chromium; Safari support can vary by version). Drag & drop of the folder is often the most reliable.
+- **Sentry collection playback seems “stuck”**:
+  - Try toggling Multi off/on once (forces a reload of the current segment).
+  - If you served locally and see console errors about missing `.map` files, those are usually harmless source-map 404s (see “Public release notes” below).
+- **Reset UI state**
+  - Tesla Replay persists UI state in `localStorage`. If your layout gets into a strange state, clear site data for the origin or remove the keys listed in “UI State Persistence”.
 
 ### Requirements
 - A modern web browser (Chrome, Edge, Safari, Firefox) with support for the `VideoDecoder` API.
@@ -160,6 +190,10 @@ There are three major subsystems:
    - Runs per-camera WebCodecs decode pipelines and synchronizes them by timestamp
    - Keeps dashboard + map tied to a “master camera” timeline
    - Supports layout presets and a per-tile focus mode
+4. **Sentry collections (Option A)**
+   - Collapses each `SentryClips/<eventId>/` folder into a single UI item
+   - Implements a “virtual playlist” timeline that maps a global ms offset → segment → local frame index
+   - Displays an event marker derived from `event.json.timestamp` when available
 
 ### Repository Layout (Key Files)
 - **`index.html`**
@@ -194,6 +228,9 @@ There are three major subsystems:
   - **Multi-cam**
     - Per-slot stream objects with their own `VideoDecoder`
     - Timestamp alignment across cameras + per-tile focus mode
+  - **Sentry collections**
+    - `buildDisplayItems()` collapses Sentry groups into a single collection item per `eventId`
+    - `collectionState` manages virtual timeline playback across segments
 
 - **`dashcam-mp4.js`**
   - **`DashcamMP4`**: parses MP4 atoms and returns video configuration + frame stream
@@ -304,6 +341,29 @@ Tesla Replay persists several UX choices so the app feels “sticky”:
 - `teslareplay.ui.multiEnabled`: `"1"` | `"0"`
 - `teslareplay.ui.multiLayout`: `fb_lr` | `fb_rl`
 
+### Sentry Collections (Implementation Details)
+Sentry collections are designed to avoid heavy upfront parsing:
+
+- **Indexing**
+  - Sentry per-minute clips are still indexed as normal `ClipGroup`s.
+  - `buildDisplayItems()` groups them by `SentryClips/<eventId>` and emits a single `collection` item.
+
+- **Timeline model**
+  - The collection has a global duration estimate computed from the first and last segment filename timestamps.
+  - `progressBar` represents **milliseconds from collection start** (not frame index).
+
+- **Segment selection**
+  - `showCollectionAtMs(ms)` chooses the correct segment by comparing `ms` to `segmentStartsMs`.
+  - When the segment changes, it loads that segment’s MP4(s) and then renders the nearest local frame.
+
+- **Playback loop**
+  - Collection playback schedules the next tick **only after** `showCollectionAtMs()` resolves.
+  - This avoids timer races that can otherwise double-schedule and cause playback to speed up at boundaries.
+
+- **Event marker**
+  - If `event.json.timestamp` parses successfully, we compute an `anchorMs` within the collection.
+  - The list UI renders a red marker at `anchorMs / durationMs`.
+
 ### Running Locally
 Because the app uses `fetch('dashcam.proto')` and WebCodecs can require a secure context, run via a local server:
 
@@ -383,6 +443,29 @@ If you are building your own parser or modifying this one, pay attention to thes
      - avoid recreating `VideoDecoder` for small seeks
      - consider a per-stream “decoder warm state” and smarter flush strategy
      - downscale decode outputs for multi-cam tiles (if/when WebCodecs scaling fits the target browsers)
+
+8. **Collections require careful timebase handling**
+   - Collections switch the scrubber from “frame index” to “milliseconds from start”.
+   - One subtle Safari gotcha: if you set a large slider `step` (e.g., 100ms) Safari may snap programmatic updates, which can make playback appear stuck or jittery.
+   - **Practical solution**: keep `step=1` and quantize only *user scrubs*, not programmatic playback.
+
+9. **Timer races are the #1 source of “sudden speed-up” bugs**
+   - Any segment-based system that loads asynchronously can accidentally create overlapping timers.
+   - The safe pattern is:
+     - cancel any existing timer
+     - perform the async load
+     - schedule the next tick only after the load resolves
+
+### Public Release Notes (Optional but Recommended)
+If you host this publicly (GitHub Pages, etc.), these quick polish items improve perceived quality:
+
+- **Avoid source-map 404s in the console**
+  - Some vendored libraries reference `.map` files that you may not ship (e.g. `protobuf.min.js.map`).
+  - These errors are harmless, but they look scary in DevTools. Either include the `.map` files or remove the sourceMappingURL comment from the vendor bundle.
+
+- **Consider replacing `alert()` with toasts**
+  - Browser alerts are blocking and feel “old web”.
+  - A small non-blocking toast system is a great low-risk UX upgrade.
 
 ### Design Notes for Future Work (Multi-Camera + Export)
 This repo is now structured so future features plug in cleanly:

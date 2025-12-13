@@ -330,7 +330,9 @@ window.DashcamMP4 = DashcamMP4;
         async function traverse(entry) {
             if (entry.isFile) {
                 const file = await new Promise((res, rej) => entry.file(res, rej));
-                if (file.name.toLowerCase().endsWith('.mp4')) {
+                const lower = file.name.toLowerCase();
+                // Collect MP4s for playback + Sentry event assets (event.json/event.png) for richer UI.
+                if (lower.endsWith('.mp4') || lower.endsWith('.json') || lower.endsWith('.png')) {
                     // Preserve best-effort relative path info for downstream grouping.
                     // - `entry.fullPath` typically includes leading "/" and the root directory name.
                     // - We store it as a non-enumerable property to avoid surprising consumers.

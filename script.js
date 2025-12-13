@@ -57,6 +57,15 @@ const previewQueue = [];
 let previewInFlight = 0;
 const MAX_PREVIEW_CONCURRENCY = 1;
 
+// Sentry event metadata (event.json)
+// Keyed by `${tag}/${eventId}` (e.g. `SentryClips/2025-12-11_17-58-00`)
+const eventMetaByKey = new Map(); // key -> parsed JSON object
+let openEventGroupId = null;
+
+// Sentry collection mode (Option A)
+// When active, progress bar represents milliseconds from the collection start (not frame indices).
+let collectionState = null; // { id, key, tag, eventId, groups, durationMs, segmentStartsMs, anchorMs, anchorGroupId, currentSegmentIdx, currentGroupId, currentLocalFrameIdx, loadToken }
+
 // DOM Elements
 const $ = id => document.getElementById(id);
 const dropOverlay = $('dropOverlay');
@@ -449,7 +458,7 @@ async function handleFile(file) {
         if (multiCamEnabled && selectedGroupId) {
             const g = clipGroupById.get(selectedGroupId);
             if (g) {
-                await loadMultiCamGroup(g);
+                await loadMultiCamGroup(g, { configureTimeline: true, deferRender: false, autoplay: !!autoplayToggle?.checked });
                 return;
             }
         }
@@ -467,6 +476,7 @@ async function handleFile(file) {
         progressBar.min = 0;
         progressBar.max = frames.length - 1;
         progressBar.value = firstKeyframe;
+        progressBar.step = 1;
         
         // Map Setup
         if (map) {
@@ -545,7 +555,7 @@ async function reloadSelectedGroup() {
 
     pause();
     if (multiCamEnabled) {
-        await loadMultiCamGroup(g);
+        await loadMultiCamGroup(g, { configureTimeline: true, deferRender: false, autoplay: !!autoplayToggle?.checked });
     } else {
         setMultiCamGridVisible(false);
         updateCameraSelect(g);
@@ -602,8 +612,12 @@ function findFrameIndexAtTime(stream, tMs) {
     return lo;
 }
 
-async function loadMultiCamGroup(group) {
+async function loadMultiCamGroup(group, opts = {}) {
     if (!seiType) throw new Error('Metadata parser not initialized');
+    const configureTimeline = opts.configureTimeline !== false;
+    const deferRender = !!opts.deferRender;
+    const doAutoplay = opts.autoplay === true;
+    const keepPlaying = !!opts.keepPlaying;
 
     resetMultiStreams();
     setMultiCamGridVisible(true);
@@ -688,7 +702,7 @@ async function loadMultiCamGroup(group) {
     firstKeyframe = mStream.firstKeyframe;
 
     // UI reset similar to handleFile
-    pause();
+    if (!keepPlaying) pause();
     if (decoder) { try { decoder.close(); } catch { } decoder = null; } // single decoder not used in multi mode
     decoding = false;
     pendingFrame = null;
@@ -697,11 +711,14 @@ async function loadMultiCamGroup(group) {
     dashboardVis.classList.add('visible');
     dropOverlay.classList.add('hidden');
 
-    // Setup progress bar with master timeline
-    progressBar.min = 0;
-    progressBar.max = frames.length - 1;
-    masterTimeIndex = Math.max(firstKeyframe, 0);
-    progressBar.value = masterTimeIndex;
+    if (configureTimeline) {
+        // Setup progress bar with master timeline
+        progressBar.min = 0;
+        progressBar.max = frames.length - 1;
+        masterTimeIndex = Math.max(firstKeyframe, 0);
+        progressBar.value = masterTimeIndex;
+        progressBar.step = 1;
+    }
 
     // Map setup from master frames
     if (map) {
@@ -723,10 +740,13 @@ async function loadMultiCamGroup(group) {
         }
     }
 
-    // Draw initial frame on all cameras
-    showFrame(masterTimeIndex);
+    if (!deferRender) {
+        // Draw initial frame on all cameras
+        const idx = configureTimeline ? masterTimeIndex : Math.max(firstKeyframe, 0);
+        showFrame(idx);
+    }
 
-    if (autoplayToggle?.checked) setTimeout(() => play(), 0);
+    if (doAutoplay) setTimeout(() => play(), 0);
 }
 
 // -------------------------------------------------------------
@@ -813,14 +833,118 @@ function timestampLabel(timestampKey) {
     }).replace(/(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})/, '$1 $2:$3:$4');
 }
 
-function buildClipGroupsFromFiles(files, directoryName = null) {
+function parseTimestampKeyToEpochMs(timestampKey) {
+    // "YYYY-MM-DD_HH-MM-SS" (local time)
+    const m = String(timestampKey || '').match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const [ , Y, Mo, D, h, mi, s ] = m;
+    return new Date(+Y, +Mo - 1, +D, +h, +mi, +s, 0).getTime();
+}
+
+function buildDisplayItems() {
+    // Returns items sorted newest-first. Items are either:
+    // - { type: 'group', id: groupId, group }
+    // - { type: 'collection', id: collectionId, collection }
+    const items = [];
+    const sentryBuckets = new Map(); // key `${tag}/${eventId}` -> groups[]
+
+    for (const g of clipGroups) {
+        if (g.tag?.toLowerCase() === 'sentryclips' && g.eventId) {
+            const key = `${g.tag}/${g.eventId}`;
+            if (!sentryBuckets.has(key)) sentryBuckets.set(key, []);
+            sentryBuckets.get(key).push(g);
+        } else {
+            items.push({ type: 'group', id: g.id, group: g });
+        }
+    }
+
+    for (const [key, groups] of sentryBuckets.entries()) {
+        groups.sort((a, b) => (a.timestampKey || '').localeCompare(b.timestampKey || ''));
+        const [tag, eventId] = key.split('/');
+        const id = `sentry:${key}`;
+
+        const startEpochMs = parseTimestampKeyToEpochMs(groups[0]?.timestampKey) ?? 0;
+        const lastStart = parseTimestampKeyToEpochMs(groups[groups.length - 1]?.timestampKey) ?? startEpochMs;
+        const endEpochMs = lastStart + 60_000; // estimate
+        const durationMs = Math.max(1, endEpochMs - startEpochMs);
+
+        const segmentStartsMs = groups.map(g => {
+            const t = parseTimestampKeyToEpochMs(g.timestampKey) ?? startEpochMs;
+            return Math.max(0, t - startEpochMs);
+        });
+
+        const meta = groups[0]?.eventMeta || (eventMetaByKey.get(key) ?? null);
+        let anchorMs = null;
+        let anchorGroupId = groups[0].id;
+        if (meta?.timestamp) {
+            const eventEpoch = Date.parse(meta.timestamp);
+            if (Number.isFinite(eventEpoch)) {
+                anchorMs = Math.max(0, Math.min(durationMs, eventEpoch - startEpochMs));
+                let anchorIdx = 0;
+                for (let i = 0; i < segmentStartsMs.length; i++) {
+                    if (segmentStartsMs[i] <= anchorMs) anchorIdx = i;
+                }
+                anchorGroupId = groups[anchorIdx]?.id || anchorGroupId;
+            }
+        }
+
+        const sortEpoch = meta?.timestamp ? Date.parse(meta.timestamp) : lastStart;
+        items.push({
+            type: 'collection',
+            id,
+            sortEpoch: Number.isFinite(sortEpoch) ? sortEpoch : lastStart,
+            collection: {
+                id,
+                key,
+                tag,
+                eventId,
+                groups,
+                meta,
+                durationMs,
+                segmentStartsMs,
+                anchorMs,
+                anchorGroupId
+            }
+        });
+    }
+
+    items.sort((a, b) => {
+        const ta = a.type === 'collection'
+            ? (a.sortEpoch ?? 0)
+            : (parseTimestampKeyToEpochMs(a.group.timestampKey) ?? 0);
+        const tb = b.type === 'collection'
+            ? (b.sortEpoch ?? 0)
+            : (parseTimestampKeyToEpochMs(b.group.timestampKey) ?? 0);
+        return tb - ta;
+    });
+
+    return items;
+}
+
+function buildTeslaCamIndex(files, directoryName = null) {
     const groups = new Map(); // id -> group
     let inferredRoot = directoryName || null;
+    const eventAssetsByKey = new Map(); // `${tag}/${eventId}` -> { jsonFile, pngFile, mp4File }
 
     for (const file of files) {
         const relPath = getBestEffortRelPath(file, directoryName);
         const { tag, rest } = parseTeslaCamPath(relPath);
         const filename = rest[rest.length - 1] || file.name;
+        const lowerName = String(filename || '').toLowerCase();
+
+        // Sentry event assets (event.json / event.png / event.mp4)
+        if (tag.toLowerCase() === 'sentryclips' && rest.length >= 2 && (lowerName === 'event.json' || lowerName === 'event.png' || lowerName === 'event.mp4')) {
+            const eventId = rest[0];
+            const key = `${tag}/${eventId}`;
+            if (!eventAssetsByKey.has(key)) eventAssetsByKey.set(key, {});
+            const entry = eventAssetsByKey.get(key);
+            if (lowerName === 'event.json') entry.jsonFile = file;
+            if (lowerName === 'event.png') entry.pngFile = file;
+            if (lowerName === 'event.mp4') entry.mp4File = file;
+            continue;
+        }
+
+        // Regular per-camera MP4
         const parsed = parseClipFilename(filename);
         if (!parsed) continue;
 
@@ -839,7 +963,11 @@ function buildClipGroupsFromFiles(files, directoryName = null) {
                 eventId,
                 timestampKey: parsed.timestampKey,
                 filesByCamera: new Map(),
-                bestRelPathHint: relPath
+                bestRelPathHint: relPath,
+                eventMeta: null,
+                eventJsonFile: null,
+                eventPngFile: null,
+                eventMp4File: null
             });
         }
         const g = groups.get(groupId);
@@ -849,9 +977,20 @@ function buildClipGroupsFromFiles(files, directoryName = null) {
         if (!inferredRoot && relPath) inferredRoot = relPath.split('/')[0] || null;
     }
 
+    // Attach any event assets to groups in the same Sentry event folder
+    for (const g of groups.values()) {
+        if (!g.eventId) continue;
+        const key = `${g.tag}/${g.eventId}`;
+        const assets = eventAssetsByKey.get(key);
+        if (!assets) continue;
+        g.eventJsonFile = assets.jsonFile || null;
+        g.eventPngFile = assets.pngFile || null;
+        g.eventMp4File = assets.mp4File || null;
+    }
+
     const arr = Array.from(groups.values());
     arr.sort((a, b) => (b.timestampKey || '').localeCompare(a.timestampKey || ''));
-    return { groups: arr, inferredRoot };
+    return { groups: arr, inferredRoot, eventAssetsByKey };
 }
 
 function handleFolderFiles(fileList, directoryName = null) {
@@ -861,36 +1000,47 @@ function handleFolderFiles(fileList, directoryName = null) {
     }
 
     const files = (Array.isArray(fileList) ? fileList : Array.from(fileList))
-        .filter(f => f.name?.toLowerCase().endsWith('.mp4'));
+        .filter(f => {
+            const n = f?.name?.toLowerCase?.() || '';
+            return n.endsWith('.mp4') || n.endsWith('.json') || n.endsWith('.png');
+        });
 
     if (!files.length) {
-        alert('No MP4 files found in that folder.');
+        alert('No supported files found in that folder.');
         return;
     }
 
     // Build index
-    const built = buildClipGroupsFromFiles(files, directoryName);
+    const built = buildTeslaCamIndex(files, directoryName);
     clipGroups = built.groups;
     clipGroupById = new Map(clipGroups.map(g => [g.id, g]));
     folderLabel = built.inferredRoot || directoryName || 'Folder';
 
     // Reset selection + previews
     selectedGroupId = null;
+    collectionState = null;
     previewCache.clear();
     previewQueue.length = 0;
     previewInFlight = 0;
+    openEventGroupId = null;
 
     // Update UI
     clipBrowserSubtitle.textContent = `${folderLabel}: ${clipGroups.length} clip group${clipGroups.length === 1 ? '' : 's'}`;
     renderClipList();
 
-    // Autoselect first group (most recent)
+    // Autoselect first item (most recent): could be a Sentry collection or a normal clip group
     if (clipGroups.length) {
-        selectClipGroup(clipGroups[0].id);
+        const items = buildDisplayItems();
+        const first = items[0];
+        if (first?.type === 'collection') selectSentryCollection(first.id);
+        else if (first?.type === 'group') selectClipGroup(first.id);
     }
 
     // Hide overlay once we have a folder loaded
     dropOverlay.classList.add('hidden');
+
+    // Parse any Sentry event.json files in the background and attach metadata to groups.
+    ingestSentryEventJson(built.eventAssetsByKey);
 }
 
 function renderClipList() {
@@ -902,17 +1052,46 @@ function renderClipList() {
         previewObserver = null;
     }
 
-    for (const g of clipGroups) {
+    const items = buildDisplayItems();
+    for (const it of items) {
+        const isCollection = it.type === 'collection';
+        const g = isCollection ? null : it.group;
+        const c = isCollection ? it.collection : null;
+
         const item = document.createElement('div');
         item.className = 'clip-item';
-        item.dataset.groupid = g.id;
+        item.dataset.groupid = isCollection ? c.id : g.id;
+        item.dataset.type = it.type;
+        if (isCollection && c.anchorGroupId) item.dataset.previewGroupid = c.anchorGroupId;
 
-        const cameras = Array.from(g.filesByCamera.keys());
-        const badges = [
-            `<span class="badge">${escapeHtml(g.tag)}</span>`,
-            g.eventId ? `<span class="badge muted">${escapeHtml(g.eventId)}</span>` : '',
-            `<span class="badge muted">${cameras.length} cam</span>`
-        ].join('');
+        const cameras = isCollection
+            ? Array.from((c.groups[0]?.filesByCamera?.keys?.() ?? []))
+            : Array.from(g.filesByCamera.keys());
+
+        const hasEventAssets = isCollection
+            ? !!(c.meta || c.groups[0]?.eventJsonFile)
+            : !!(g.eventJsonFile || g.eventMeta);
+
+        const badges = isCollection
+            ? [
+                `<span class="badge">${escapeHtml(c.tag)}</span>`,
+                `<span class="badge muted">${escapeHtml(c.eventId)}</span>`,
+                `<span class="badge muted">${c.groups.length} segments</span>`
+              ].join('')
+            : [
+                `<span class="badge">${escapeHtml(g.tag)}</span>`,
+                g.eventId ? `<span class="badge muted">${escapeHtml(g.eventId)}</span>` : '',
+                `<span class="badge muted">${cameras.length} cam</span>`
+              ].join('');
+
+        const title = isCollection ? `${c.eventId}` : timestampLabel(g.timestampKey);
+        const subline = isCollection
+            ? `${c.groups.length} segments · ${Math.max(1, cameras.length)} cam`
+            : cameras.map(cameraLabel).join(' · ');
+
+        const markerLeft = (isCollection && c.anchorMs != null)
+            ? Math.round((c.anchorMs / c.durationMs) * 1000) / 10
+            : null;
 
         item.innerHTML = `
             <div class="clip-media">
@@ -920,15 +1099,54 @@ function renderClipList() {
                 <canvas class="clip-minimap" width="112" height="63"></canvas>
             </div>
             <div class="clip-meta">
-                <div class="clip-title">${escapeHtml(timestampLabel(g.timestampKey))}</div>
-                <div class="clip-badges">${badges}</div>
-                <div class="clip-sub">
-                    <div>${escapeHtml(cameras.map(cameraLabel).join(' · '))}</div>
+                <div class="clip-title">${escapeHtml(title)}</div>
+                <div class="clip-badges">
+                    ${badges}
+                    ${hasEventAssets ? `
+                        <button class="event-btn" type="button" title="Event details" aria-label="Event details">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 12 6zm-1.3 5.1h2.6V18h-2.6v-6.9z"></path></svg>
+                        </button>
+                    ` : ''}
                 </div>
+                <div class="clip-sub">
+                    <div>${escapeHtml(subline)}</div>
+                    ${markerLeft != null ? `
+                        <div class="timeline-bar" title="Event time">
+                            <div class="timeline-marker" style="left:${markerLeft}%"></div>
+                        </div>
+                    ` : ''}
+                </div>
+            </div>
+            <div class="event-pop" aria-label="Event details">
+                <div class="event-pop-header">
+                    <div class="event-pop-title">Event</div>
+                    <button class="event-close" type="button" aria-label="Close">✕</button>
+                </div>
+                <div class="event-kv"></div>
             </div>
         `;
 
-        item.onclick = () => selectClipGroup(g.id);
+        item.onclick = () => isCollection ? selectSentryCollection(c.id) : selectClipGroup(g.id);
+        const eventBtn = item.querySelector('.event-btn');
+        if (eventBtn) {
+            eventBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isCollection) {
+                    toggleEventPopout(c.id, c.meta || null);
+                } else {
+                    toggleEventPopout(g.id);
+                }
+            };
+        }
+        const closeBtn = item.querySelector('.event-close');
+        if (closeBtn) {
+            closeBtn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                closeEventPopout();
+            };
+        }
         clipList.appendChild(item);
     }
 
@@ -937,8 +1155,11 @@ function renderClipList() {
         for (const entry of entries) {
             if (!entry.isIntersecting) continue;
             const el = entry.target;
+            const type = el.dataset.type;
             const groupId = el.dataset.groupid;
-            if (groupId) ensureGroupPreview(groupId);
+            const previewGroupId = el.dataset.previewGroupid;
+            if (type === 'collection' && previewGroupId) ensureGroupPreview(previewGroupId);
+            else if (type === 'group' && groupId) ensureGroupPreview(groupId);
         }
     }, { root: clipList, threshold: 0.2 });
 
@@ -948,17 +1169,80 @@ function renderClipList() {
     highlightSelectedClip();
 }
 
+// Close event popout when clicking elsewhere
+document.addEventListener('click', (e) => {
+    if (!openEventGroupId) return;
+    const openEl = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
+    if (!openEl) { openEventGroupId = null; return; }
+    if (openEl.contains(e.target)) return;
+    closeEventPopout();
+});
+
+function closeEventPopout() {
+    if (!openEventGroupId) return;
+    const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
+    if (el) el.classList.remove('event-open');
+    openEventGroupId = null;
+}
+
+function toggleEventPopout(rowId, metaOverride = null) {
+    if (openEventGroupId && openEventGroupId !== rowId) closeEventPopout();
+    const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(rowId)}"]`);
+    if (!el) return;
+    const opening = !el.classList.contains('event-open');
+    if (!opening) { closeEventPopout(); return; }
+
+    const meta = metaOverride ?? (clipGroupById.get(rowId)?.eventMeta || null);
+    populateEventPopout(el, meta);
+    el.classList.add('event-open');
+    openEventGroupId = rowId;
+}
+
+function populateEventPopout(rowEl, meta) {
+    const kv = rowEl.querySelector('.event-kv');
+    if (!kv) return;
+    kv.innerHTML = '';
+
+    if (!meta) {
+        const kEl = document.createElement('div');
+        kEl.className = 'k';
+        kEl.textContent = 'status';
+        const vEl = document.createElement('div');
+        vEl.className = 'v';
+        vEl.textContent = 'Loading event.json…';
+        kv.appendChild(kEl);
+        kv.appendChild(vEl);
+        return;
+    }
+
+    const preferred = ['timestamp', 'reason', 'camera', 'city', 'street', 'est_lat', 'est_lon'];
+    const keys = [...preferred.filter(k => meta[k] != null), ...Object.keys(meta).filter(k => !preferred.includes(k))];
+    for (const k of keys) {
+        const v = meta[k];
+        const kEl = document.createElement('div');
+        kEl.className = 'k';
+        kEl.textContent = k;
+        const vEl = document.createElement('div');
+        vEl.className = 'v';
+        vEl.textContent = String(v);
+        kv.appendChild(kEl);
+        kv.appendChild(vEl);
+    }
+}
+
 function highlightSelectedClip() {
     for (const el of clipList.querySelectorAll('.clip-item')) {
-        el.classList.toggle('selected', el.dataset.groupid === selectedGroupId);
+        el.classList.toggle('selected', el.dataset.groupid === selectedGroupId || el.dataset.groupid === collectionState?.id);
     }
 }
 
 function selectClipGroup(groupId) {
     const g = clipGroupById.get(groupId);
     if (!g) return;
+    collectionState = null;
     selectedGroupId = groupId;
     highlightSelectedClip();
+    progressBar.step = 1;
 
     // Choose default camera/master: front preferred, else first available
     const defaultCam = g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front');
@@ -971,6 +1255,42 @@ function selectClipGroup(groupId) {
 
     // Kick off preview for this group immediately
     ensureGroupPreview(groupId, { highPriority: true });
+}
+
+function selectSentryCollection(collectionId) {
+    const items = buildDisplayItems();
+    const it = items.find(x => x.type === 'collection' && x.id === collectionId);
+    if (!it) return;
+
+    const c = it.collection;
+    selectedGroupId = null;
+    // Ensure a clean start. If we came from an actively playing clip, segment loading clears timers,
+    // which can leave playing=true but no timer loop. Pause first so autoplay can reliably start.
+    pause();
+    collectionState = {
+        ...c,
+        currentSegmentIdx: -1,
+        currentGroupId: null,
+        currentLocalFrameIdx: 0,
+        loadToken: 0
+    };
+    highlightSelectedClip();
+
+    // Configure progress bar as millisecond timeline.
+    progressBar.min = 0;
+    progressBar.max = Math.floor(collectionState.durationMs);
+    // Keep step=1 so playback can advance smoothly (Safari may snap programmatic values to step).
+    // User scrubs are quantized in the oninput handler.
+    progressBar.step = 1;
+    progressBar.value = Math.floor(collectionState.anchorMs ?? 0);
+    playBtn.disabled = false;
+    progressBar.disabled = false;
+
+    // Load at anchor (event time) if known, else start.
+    const startMs = collectionState.anchorMs ?? 0;
+    showCollectionAtMs(startMs).then(() => {
+        if (autoplayToggle?.checked) setTimeout(() => play(), 0);
+    }).catch(() => { /* ignore */ });
 }
 
 function updateCameraSelect(group) {
@@ -991,11 +1311,101 @@ function updateCameraSelect(group) {
     cameraSelect.value = selectedCamera;
 }
 
+async function ingestSentryEventJson(eventAssetsByKey) {
+    if (!eventAssetsByKey || eventAssetsByKey.size === 0) return;
+    for (const [key, assets] of eventAssetsByKey.entries()) {
+        if (!assets?.jsonFile) continue;
+        try {
+            const text = await assets.jsonFile.text();
+            const meta = JSON.parse(text);
+            eventMetaByKey.set(key, meta);
+            // Attach meta to all groups in the same Sentry event folder
+            const [tag, eventId] = key.split('/');
+            for (const g of clipGroups) {
+                if (g.tag === tag && g.eventId === eventId) g.eventMeta = meta;
+            }
+            // Re-render list so Sentry collections can show event marker + updated details.
+            renderClipList();
+            // If an event popout is currently open, refresh its contents.
+            if (openEventGroupId) {
+                const el = clipList?.querySelector?.(`.clip-item[data-groupid="${cssEscape(openEventGroupId)}"]`);
+                if (el?.classList?.contains('event-open')) populateEventPopout(el, meta);
+            }
+        } catch { /* ignore parse errors */ }
+    }
+}
+
 function loadClipGroupCamera(group, camera) {
     const entry = group.filesByCamera.get(camera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
     if (!entry?.file) return;
     // This will reset player state and parse SEI/frames, preserving SEI importance.
     handleFile(entry.file);
+}
+
+async function loadSingleGroup(group, camera, opts = {}) {
+    const configureTimeline = opts.configureTimeline !== false;
+    const deferRender = !!opts.deferRender;
+    const doAutoplay = opts.autoplay === true;
+    const keepPlaying = !!opts.keepPlaying;
+
+    const entry = group.filesByCamera.get(camera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
+    if (!entry?.file) throw new Error('Camera file not found');
+
+    // Reset state (similar to handleFile, but optionally skip timeline configuration)
+    if (!keepPlaying) pause();
+    if (decoder) { try { decoder.close(); } catch { } decoder = null; }
+    decoding = false;
+    pendingFrame = null;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    dropOverlay.classList.add('hidden');
+    dashboardVis.classList.remove('visible');
+    mapVis.classList.remove('visible');
+    playBtn.disabled = true;
+    progressBar.disabled = true;
+
+    await loadMp4IntoPlayer(entry.file);
+    firstKeyframe = frames.findIndex(f => f.keyframe);
+    if (firstKeyframe === -1) throw new Error('No keyframes found in MP4');
+
+    const config = mp4.getConfig();
+    canvas.width = config.width;
+    canvas.height = config.height;
+
+    if (configureTimeline) {
+        progressBar.min = 0;
+        progressBar.max = frames.length - 1;
+        progressBar.value = Math.max(firstKeyframe, 0);
+    }
+
+    // Map setup (segment only)
+    if (map) {
+        mapPath = [];
+        if (mapMarker) { mapMarker.remove(); mapMarker = null; }
+        if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
+
+        mapPath = frames
+            .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
+            .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
+
+        if (mapPath.length > 0) {
+            mapVis.classList.add('visible');
+            setTimeout(() => {
+                map.invalidateSize();
+                mapPolyline = L.polyline(mapPath, { color: '#3e9cbf', weight: 3, opacity: 0.7 }).addTo(map);
+                map.fitBounds(mapPolyline.getBounds(), { padding: [20, 20] });
+            }, 100);
+        }
+    }
+
+    playBtn.disabled = false;
+    progressBar.disabled = false;
+    dashboardVis.classList.add('visible');
+
+    if (!deferRender) {
+        showFrame(Math.max(firstKeyframe, 0));
+    }
+    if (doAutoplay) setTimeout(() => play(), 0);
 }
 
 function ensureGroupPreview(groupId, opts = {}) {
@@ -1028,10 +1438,15 @@ function ensureGroupPreview(groupId, opts = {}) {
             pathPoints = downsamplePoints(pts, 120);
         } catch { /* ignore */ }
 
-        // 2) thumbnail (best-effort) using HTMLVideoElement snapshot (fast enough for previews)
+        // 2) thumbnail
         let thumbDataUrl = null;
+        // Prefer Sentry event.png when present (fast + consistent)
+        if (group.eventPngFile) {
+            try { thumbDataUrl = await fileToDataUrl(group.eventPngFile); } catch { /* ignore */ }
+        }
+        // Otherwise best-effort using HTMLVideoElement snapshot (fast enough for previews)
         try {
-            thumbDataUrl = await captureVideoThumbnail(entry.file, 112, 63);
+            if (!thumbDataUrl) thumbDataUrl = await captureVideoThumbnail(entry.file, 112, 63);
         } catch { /* ignore */ }
         // Fallback: decode first keyframe using WebCodecs (more reliable for local MP4s)
         if (!thumbDataUrl && buffer) {
@@ -1064,17 +1479,22 @@ function pumpPreviewQueue() {
 }
 
 function applyGroupPreviewToRow(groupId) {
-    const el = clipList.querySelector(`.clip-item[data-groupid="${cssEscape(groupId)}"]`);
-    if (!el) return;
     const preview = previewCache.get(groupId);
     if (!preview || preview.status !== 'ready') return;
 
-    const img = el.querySelector('.clip-thumb img');
-    if (img && preview.thumbDataUrl) img.src = preview.thumbDataUrl;
+    // Update any row that directly represents this group OR any collection row that references it as its preview group.
+    const rows = [
+        ...clipList.querySelectorAll(`.clip-item[data-groupid="${cssEscape(groupId)}"]`),
+        ...clipList.querySelectorAll(`.clip-item[data-preview-groupid="${cssEscape(groupId)}"]`)
+    ];
+    for (const el of rows) {
+        const img = el.querySelector('.clip-thumb img');
+        if (img && preview.thumbDataUrl) img.src = preview.thumbDataUrl;
 
-    const canvasEl = el.querySelector('canvas.clip-minimap');
-    if (canvasEl && preview.pathPoints?.length) {
-        drawMiniPath(canvasEl, preview.pathPoints);
+        const canvasEl = el.querySelector('canvas.clip-minimap');
+        if (canvasEl && preview.pathPoints?.length) {
+            drawMiniPath(canvasEl, preview.pathPoints);
+        }
     }
 }
 
@@ -1145,6 +1565,15 @@ function drawMiniPath(canvasEl, points) {
     c.beginPath(); c.arc(sx, sy, 2.5, 0, Math.PI * 2); c.fill();
     c.fillStyle = 'rgba(255, 0, 0, 0.85)';
     c.beginPath(); c.arc(ex, ey, 2.5, 0, Math.PI * 2); c.fill();
+}
+
+async function fileToDataUrl(file) {
+    return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('FileReader failed'));
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsDataURL(file);
+    });
 }
 
 async function captureVideoThumbnail(file, width, height) {
@@ -1256,10 +1685,59 @@ function cssEscape(s) {
 
 // Playback Logic
 playBtn.onclick = () => playing ? pause() : play();
-progressBar.oninput = () => {
+let isScrubbing = false;
+let collectionScrubPreviewTimer = null;
+function previewAtSliderValue() {
     pause();
-    showFrame(+progressBar.value);
-};
+    if (collectionState) {
+        // Keep step=1 for playback smoothness, but quantize user scrubs to reduce segment churn.
+        const quantum = 100; // ms
+        const raw = +progressBar.value || 0;
+        const snapped = Math.round(raw / quantum) * quantum;
+        progressBar.value = String(snapped);
+        // Debounce heavy segment loads while dragging to avoid black frames and decoder churn.
+        if (collectionScrubPreviewTimer) clearTimeout(collectionScrubPreviewTimer);
+        collectionScrubPreviewTimer = setTimeout(() => {
+            collectionScrubPreviewTimer = null;
+            showCollectionAtMs(snapped);
+        }, 120);
+    } else {
+        showFrame(+progressBar.value);
+    }
+}
+
+function maybeAutoplayAfterSeek() {
+    if (!autoplayToggle?.checked) return;
+    // If the user is still dragging, don't restart yet.
+    if (isScrubbing) return;
+    setTimeout(() => play(), 0);
+}
+
+// Preview while dragging/scrubbing
+progressBar.addEventListener('input', () => {
+    previewAtSliderValue();
+});
+
+// Commit when the user releases the slider (click or drag end)
+progressBar.addEventListener('change', () => {
+    isScrubbing = false;
+    if (collectionScrubPreviewTimer) { clearTimeout(collectionScrubPreviewTimer); collectionScrubPreviewTimer = null; }
+    // For collections: do the final seek immediately on release (not debounced).
+    if (collectionState) {
+        pause();
+        const quantum = 100;
+        const raw = +progressBar.value || 0;
+        const snapped = Math.round(raw / quantum) * quantum;
+        progressBar.value = String(snapped);
+        showCollectionAtMs(snapped).then(() => maybeAutoplayAfterSeek()).catch(() => { /* ignore */ });
+        return;
+    }
+    previewAtSliderValue();
+    maybeAutoplayAfterSeek();
+});
+progressBar.addEventListener('pointerdown', () => { isScrubbing = true; });
+progressBar.addEventListener('pointerup', () => { isScrubbing = false; maybeAutoplayAfterSeek(); });
+progressBar.addEventListener('pointercancel', () => { isScrubbing = false; });
 
 // Keyboard controls
 document.addEventListener('keydown', (e) => {
@@ -1268,25 +1746,56 @@ document.addEventListener('keydown', (e) => {
         e.preventDefault();
         playing ? pause() : play();
     } else if (e.code === 'Escape') {
-        if (multiFocusSlot) {
+        if (openEventGroupId) {
+            e.preventDefault();
+            closeEventPopout();
+        } else if (multiFocusSlot) {
             e.preventDefault();
             clearMultiFocus();
         }
     } else if (e.code === 'ArrowLeft') {
         pause();
-        const prev = Math.max(0, +progressBar.value - 15); // ~0.5s jump
-        progressBar.value = prev;
-        showFrame(prev);
+        if (collectionState) {
+            const prev = Math.max(0, +progressBar.value - 1000);
+            progressBar.value = prev;
+            showCollectionAtMs(prev);
+            maybeAutoplayAfterSeek();
+        } else {
+            const prev = Math.max(0, +progressBar.value - 15); // ~0.5s jump
+            progressBar.value = prev;
+            showFrame(prev);
+            maybeAutoplayAfterSeek();
+        }
     } else if (e.code === 'ArrowRight') {
         pause();
-        const next = Math.min(frames.length - 1, +progressBar.value + 15);
-        progressBar.value = next;
-        showFrame(next);
+        if (collectionState) {
+            const next = Math.min(+progressBar.max, +progressBar.value + 1000);
+            progressBar.value = next;
+            showCollectionAtMs(next);
+            maybeAutoplayAfterSeek();
+        } else {
+            const next = Math.min(frames.length - 1, +progressBar.value + 15);
+            progressBar.value = next;
+            showFrame(next);
+            maybeAutoplayAfterSeek();
+        }
     }
 });
 
 function play() {
-    if (!frames || playing) return;
+    if (playing) return;
+    if (!frames || !frames.length) {
+        // In Sentry collection mode we may not have a segment loaded yet; load it, then start.
+        if (collectionState) {
+            playing = true;
+            updatePlayButton();
+            showCollectionAtMs(+progressBar.value || 0)
+                .then(() => { if (playing) playNext(); })
+                .catch(() => { pause(); });
+            return;
+        }
+        return;
+    }
     playing = true;
     updatePlayButton();
     playNext();
@@ -1306,6 +1815,34 @@ function updatePlayButton() {
 
 function playNext() {
     if (!playing) return;
+    if (collectionState) {
+        // Ensure we never end up with multiple timers running across segment transitions.
+        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+        if (collectionState.loading) {
+            playTimer = setTimeout(playNext, 50);
+            return;
+        }
+        const currentMs = +progressBar.value;
+        const idx = Math.min(Math.max(collectionState.currentLocalFrameIdx || 0, 0), (frames?.length || 1) - 1);
+        const step = frames?.[idx]?.duration || 33;
+        const nextMs = currentMs + step;
+        if (nextMs > +progressBar.max) {
+            pause();
+            return;
+        }
+        progressBar.value = Math.floor(nextMs);
+        // Schedule the next tick only AFTER the segment/frame is ready.
+        // This avoids a race where a segment load clears the timer before it's assigned.
+        showCollectionAtMs(nextMs)
+            .then(() => {
+                if (!playing) return;
+                // If we're still loading (boundary), poll shortly; otherwise use frame duration.
+                playTimer = setTimeout(playNext, collectionState?.loading ? 50 : step);
+            })
+            .catch(() => pause());
+        return;
+    }
+
     let next = +progressBar.value + 1;
     if (!frames || next >= frames.length) {
         pause();
@@ -1343,6 +1880,67 @@ function showFrame(index) {
     } else {
         decodeFrame(index);
     }
+}
+
+function findFrameIndexAtLocalMs(localMs) {
+    if (!frames?.length) return 0;
+    let lo = 0, hi = frames.length - 1;
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi + 1) / 2);
+        if ((frames[mid].timestamp || 0) <= localMs) lo = mid;
+        else hi = mid - 1;
+    }
+    return lo;
+}
+
+async function showCollectionAtMs(ms) {
+    if (!collectionState) return;
+    const token = ++collectionState.loadToken;
+    const clamped = Math.max(0, Math.min(collectionState.durationMs, ms));
+
+    // Find segment index by start offsets
+    const starts = collectionState.segmentStartsMs;
+    let segIdx = 0;
+    for (let i = 0; i < starts.length; i++) {
+        if (starts[i] <= clamped) segIdx = i;
+        else break;
+    }
+
+    const segStart = starts[segIdx] || 0;
+    const localMs = Math.max(0, clamped - segStart);
+
+    if (segIdx !== collectionState.currentSegmentIdx) {
+        await loadCollectionSegment(segIdx, token);
+        if (!collectionState || collectionState.loadToken !== token) return;
+    }
+
+    // Render the nearest frame in the current segment.
+    const idx = findFrameIndexAtLocalMs(localMs);
+    collectionState.currentLocalFrameIdx = idx;
+    progressBar.value = Math.floor(clamped);
+    showFrame(idx);
+}
+
+async function loadCollectionSegment(segIdx, token) {
+    if (!collectionState) return;
+    const group = collectionState.groups?.[segIdx];
+    if (!group) return;
+
+    // Prevent overlapping timers during segment transitions.
+    if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+    collectionState.loading = true;
+
+    collectionState.currentSegmentIdx = segIdx;
+    collectionState.currentGroupId = group.id;
+
+    if (multiCamEnabled) {
+        await loadMultiCamGroup(group, { configureTimeline: false, deferRender: true, autoplay: false, keepPlaying: true });
+    } else {
+        await loadSingleGroup(group, selectedCamera || 'front', { configureTimeline: false, deferRender: true, autoplay: false, keepPlaying: true });
+    }
+
+    if (!collectionState || collectionState.loadToken !== token) return;
+    collectionState.loading = false;
 }
 
 function streamShowFrame(stream, index) {
@@ -1454,7 +2052,10 @@ async function decodeFrame(index) {
             decoder.flush().catch(reject);
         });
     } catch (e) {
-        console.error('Decode error:', e);
+        // AbortError ("Close called") is expected during rapid seeks / segment transitions.
+        if (e?.name !== 'AbortError' && !String(e?.message || '').includes('Close called')) {
+            console.error('Decode error:', e);
+        }
     } finally {
         decoding = false;
         if (pendingFrame !== null) {
@@ -1586,6 +2187,13 @@ toggleExtra.onclick = () => {
 };
 
 function updateTimeDisplay(frameIndex) {
+    if (collectionState) {
+        const seconds = Math.floor((+progressBar.value || 0) / 1000);
+        const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const s = (seconds % 60).toString().padStart(2, '0');
+        timeDisplay.textContent = `${m}:${s}`;
+        return;
+    }
     if (!frames || !frames[frameIndex]) return;
     const seconds = Math.floor(frames[frameIndex].timestamp / 1000);
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
