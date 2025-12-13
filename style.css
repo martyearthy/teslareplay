@@ -7,6 +7,10 @@
     --border-color: #444;
     --vis-bg: rgba(0, 0, 0, 0.7);
     --panel-bg-2: rgba(18, 18, 18, 0.85);
+    --clips-float-width: 340px;
+    --clips-dock-width: 360px;
+    --clips-collapsed-width: 46px;
+    --left-panel-offset: 360px; /* default used by map placement; overridden per mode */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -68,6 +72,68 @@ canvas {
     object-fit: contain;
 }
 
+/* Multi-camera grid */
+.hidden { display: none !important; }
+.multi-cam-grid {
+    position: absolute;
+    inset: 0;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 10px;
+    z-index: 5;
+}
+.multi-tile {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.multi-tile canvas {
+    width: 100%;
+    height: 100%;
+}
+.multi-label {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    z-index: 2;
+}
+
+/* Multi focus mode (click a tile to expand; click again / Esc to exit) */
+.multi-cam-grid.focused {
+    display: block;
+}
+.multi-cam-grid.focused .multi-tile {
+    display: none;
+}
+.multi-cam-grid.focused[data-focus-slot="tl"] .multi-tile[data-slot="tl"],
+.multi-cam-grid.focused[data-focus-slot="tr"] .multi-tile[data-slot="tr"],
+.multi-cam-grid.focused[data-focus-slot="bl"] .multi-tile[data-slot="bl"],
+.multi-cam-grid.focused[data-focus-slot="br"] .multi-tile[data-slot="br"] {
+    display: flex;
+    position: absolute;
+    inset: 10px;
+    z-index: 10;
+}
+.multi-cam-grid.focused .multi-label {
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
 /* Drop Overlay */
 .drop-overlay {
     position: absolute;
@@ -99,7 +165,7 @@ canvas {
     position: absolute;
     top: 20px;
     left: 20px;
-    width: 340px;
+    width: min(var(--clips-float-width), calc(100% - 40px));
     max-height: calc(100% - 100px);
     background: var(--panel-bg-2);
     backdrop-filter: blur(10px);
@@ -112,13 +178,62 @@ canvas {
     flex-direction: column;
 }
 
+.clips-mode-floating { --left-panel-offset: 360px; }
+/* In docked mode the video container is shifted right, so the map offset can be 0. */
+.clips-mode-docked { --left-panel-offset: 0px; }
+.clips-mode-collapsed { --left-panel-offset: 70px; }
+
+.clips-mode-docked .clip-browser {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 60px; /* controls bar height */
+    width: var(--clips-dock-width);
+    max-height: none;
+    border-radius: 0;
+    border-left: none;
+    border-top: none;
+    border-bottom: none;
+}
+
+.clips-mode-docked .video-container {
+    margin-left: var(--clips-dock-width);
+}
+
+.clips-mode-docked .controls {
+    padding-left: calc(20px + var(--clips-dock-width));
+}
+
+.clips-mode-collapsed .clip-browser {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    width: var(--clips-collapsed-width);
+    max-height: calc(100% - 100px);
+}
+.clips-mode-collapsed .clip-browser-title,
+.clips-mode-collapsed #clipList,
+.clips-mode-collapsed #chooseFolderBtn,
+.clips-mode-collapsed #chooseFileBtn,
+.clips-mode-collapsed .info-link,
+.clips-mode-collapsed #clipsDockToggleBtn {
+    display: none;
+}
+.clips-mode-collapsed #clipsCollapseBtn {
+    width: 34px;
+    padding: 0;
+}
+.clips-mode-collapsed .clip-browser-header {
+    justify-content: center;
+}
+
 .clip-browser-header {
     padding: 10px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: start;
+    gap: 10px 12px;
 }
 
 .clip-browser-title-main {
@@ -138,6 +253,8 @@ canvas {
 .clip-browser-actions {
     display: flex;
     gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .mini-btn {
@@ -152,6 +269,46 @@ canvas {
     font-weight: 600;
 }
 .mini-btn:hover { background: rgba(255, 255, 255, 0.08); }
+
+.icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.86);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    padding: 0;
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.icon-btn:focus-visible { outline: 2px solid rgba(62, 156, 191, 0.55); outline-offset: 2px; }
+.icon-btn svg {
+    width: 17px;
+    height: 17px;
+    fill: currentColor;
+}
+.info-link { text-decoration: none; }
+
+.icon-btn--sm {
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+}
+
+.layout-quick {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.icon-btn.active {
+    border-color: rgba(62, 156, 191, 0.55);
+    background: rgba(62, 156, 191, 0.18);
+}
+
+.clips-mode-collapsed #clipsCollapseBtn svg { transform: rotate(180deg); }
 
 .clip-list {
     overflow: auto;
@@ -333,7 +490,7 @@ canvas {
 
 .map-vis {
     top: 20px;
-    left: 380px; /* avoid overlapping the clip browser */
+    left: calc(var(--left-panel-offset) + 20px); /* avoid overlapping the left panel */
     width: 250px;
     height: 250px;
     display: none;

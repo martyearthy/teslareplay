@@ -17,6 +17,39 @@ let selectedGroupId = null;
 let selectedCamera = 'front';
 let folderLabel = null; // e.g. "TeslaCam" or picked folder name
 
+// Multi-camera playback (Step 6)
+let multiCamEnabled = false;
+let multiStreams = new Map(); // camera -> stream
+let masterCamera = 'front'; // drives timeline + dashboard + map
+let masterTimeIndex = 0;
+let multiLayoutId = 'fb_lr';
+let multiFocusSlot = null;
+
+const MULTI_LAYOUT_KEY = 'teslareplay.ui.multiLayout';
+const MULTI_ENABLED_KEY = 'teslareplay.ui.multiEnabled';
+const MULTI_LAYOUTS = {
+    // Slot order is TL, TR, BL, BR (2x2)
+    fb_lr: {
+        name: 'Front/Back/Left/Right',
+        slots: [
+            { slot: 'tl', camera: 'front', label: 'Front' },
+            { slot: 'tr', camera: 'back', label: 'Back' },
+            { slot: 'bl', camera: 'left_repeater', label: 'Left' },
+            { slot: 'br', camera: 'right_repeater', label: 'Right' }
+        ]
+    },
+    fb_rl: {
+        name: 'Front/Back/Right/Left',
+        slots: [
+            { slot: 'tl', camera: 'front', label: 'Front' },
+            { slot: 'tr', camera: 'back', label: 'Back' },
+            { slot: 'bl', camera: 'right_repeater', label: 'Right' },
+            { slot: 'br', camera: 'left_repeater', label: 'Left' }
+        ]
+    }
+    // Future: add 6-cam layouts that include left/right pillar cameras.
+};
+
 // Preview pipeline (lazy, cached)
 const previewCache = new Map(); // groupId -> { thumbDataUrl, pathPoints, status }
 let previewObserver = null;
@@ -42,8 +75,19 @@ const clipList = $('clipList');
 const clipBrowserSubtitle = $('clipBrowserSubtitle');
 const chooseFolderBtn = $('chooseFolderBtn');
 const chooseFileBtn = $('chooseFileBtn');
+const clipsDockToggleBtn = $('clipsDockToggleBtn');
+const clipsCollapseBtn = $('clipsCollapseBtn');
 const cameraSelect = $('cameraSelect');
 const autoplayToggle = $('autoplayToggle');
+const multiCamToggle = $('multiCamToggle');
+const multiLayoutSelect = $('multiLayoutSelect');
+const layoutBtnFbLr = $('layoutBtnFbLr');
+const layoutBtnFbRl = $('layoutBtnFbRl');
+const multiCamGrid = $('multiCamGrid');
+const canvasFront = $('canvasFront');
+const canvasBack = $('canvasBack');
+const canvasLeft = $('canvasLeft');
+const canvasRight = $('canvasRight');
 
 // Visualization Elements
 const speedValue = $('speedValue');
@@ -112,12 +156,158 @@ const MPS_TO_MPH = 2.23694;
         fileInput.click();
     };
 
-    cameraSelect.onchange = () => {
-        selectedCamera = cameraSelect.value;
-        const g = selectedGroupId ? clipGroupById.get(selectedGroupId) : null;
-        if (g) loadClipGroupCamera(g, selectedCamera);
+    // Panel layout mode (floating/docked/collapsed)
+    initClipsPanelMode();
+    clipsDockToggleBtn.onclick = (e) => {
+        e.preventDefault();
+        toggleDockMode();
     };
+    clipsCollapseBtn.onclick = (e) => {
+        e.preventDefault();
+        toggleCollapsedMode();
+    };
+
+    cameraSelect.onchange = () => {
+        const g = selectedGroupId ? clipGroupById.get(selectedGroupId) : null;
+        if (!g) return;
+
+        if (multiCamEnabled) {
+            // In multi-cam, the dropdown selects the master camera (telemetry + timeline).
+            masterCamera = cameraSelect.value;
+            reloadSelectedGroup();
+        } else {
+            selectedCamera = cameraSelect.value;
+            loadClipGroupCamera(g, selectedCamera);
+        }
+    };
+
+    multiCamToggle.onchange = () => {
+        multiCamEnabled = !!multiCamToggle.checked;
+        localStorage.setItem(MULTI_ENABLED_KEY, multiCamEnabled ? '1' : '0');
+        if (multiLayoutSelect) multiLayoutSelect.disabled = !multiCamEnabled;
+        reloadSelectedGroup();
+    };
+
+    // Multi-cam layout preset
+    multiLayoutId = localStorage.getItem(MULTI_LAYOUT_KEY) || 'fb_lr';
+    if (multiLayoutSelect) {
+        multiLayoutSelect.value = multiLayoutId;
+        multiLayoutSelect.onchange = () => {
+            setMultiLayout(multiLayoutSelect.value || 'fb_lr');
+        };
+    }
+
+    // Layout quick switch buttons
+    if (layoutBtnFbLr) layoutBtnFbLr.onclick = (e) => { e.preventDefault(); setMultiLayout('fb_lr'); };
+    if (layoutBtnFbRl) layoutBtnFbRl.onclick = (e) => { e.preventDefault(); setMultiLayout('fb_rl'); };
+    updateMultiLayoutButtons();
+
+    // Multi focus mode (click a tile)
+    if (multiCamGrid) {
+        multiCamGrid.addEventListener('click', (e) => {
+            const tile = e.target.closest?.('.multi-tile');
+            if (!tile) return;
+            const slot = tile.getAttribute('data-slot');
+            if (!slot) return;
+            toggleMultiFocus(slot);
+        });
+    }
+
+    // Multi-cam enabled preference (default ON if no prior preference)
+    const savedMulti = localStorage.getItem(MULTI_ENABLED_KEY);
+    multiCamEnabled = savedMulti == null ? !!multiCamToggle?.checked : savedMulti === '1';
+    if (multiCamToggle) multiCamToggle.checked = multiCamEnabled;
+    if (multiLayoutSelect) multiLayoutSelect.disabled = !multiCamEnabled;
 })();
+
+function setMultiLayout(layoutId) {
+    const next = MULTI_LAYOUTS[layoutId] ? layoutId : 'fb_lr';
+    multiLayoutId = next;
+    localStorage.setItem(MULTI_LAYOUT_KEY, next);
+    if (multiLayoutSelect) multiLayoutSelect.value = next;
+    updateMultiLayoutButtons();
+    if (multiCamEnabled) reloadSelectedGroup();
+}
+
+function updateMultiLayoutButtons() {
+    if (layoutBtnFbLr) layoutBtnFbLr.classList.toggle('active', multiLayoutId === 'fb_lr');
+    if (layoutBtnFbRl) layoutBtnFbRl.classList.toggle('active', multiLayoutId === 'fb_rl');
+}
+
+function clearMultiFocus() {
+    multiFocusSlot = null;
+    if (!multiCamGrid) return;
+    multiCamGrid.classList.remove('focused');
+    multiCamGrid.removeAttribute('data-focus-slot');
+}
+
+function toggleMultiFocus(slot) {
+    if (!multiCamGrid) return;
+    if (multiFocusSlot === slot) {
+        clearMultiFocus();
+        return;
+    }
+    multiFocusSlot = slot;
+    multiCamGrid.classList.add('focused');
+    multiCamGrid.setAttribute('data-focus-slot', slot);
+}
+
+// -------------------------------------------------------------
+// Clips panel mode (floating / docked / collapsed)
+// -------------------------------------------------------------
+
+const CLIPS_MODE_KEY = 'teslareplay.ui.clipsMode';
+const CLIPS_PREV_MODE_KEY = 'teslareplay.ui.clipsPrevMode';
+
+function initClipsPanelMode() {
+    const saved = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
+    applyClipsMode(saved);
+}
+
+function applyClipsMode(mode) {
+    const m = (mode === 'docked' || mode === 'collapsed') ? mode : 'floating';
+    document.body.classList.remove('clips-mode-floating', 'clips-mode-docked', 'clips-mode-collapsed');
+    document.body.classList.add(`clips-mode-${m}`);
+    localStorage.setItem(CLIPS_MODE_KEY, m);
+
+    if (clipsDockToggleBtn) {
+        const isDocked = (m === 'docked');
+        clipsDockToggleBtn.title = isDocked ? 'Float panel' : 'Dock panel';
+        clipsDockToggleBtn.setAttribute('aria-label', isDocked ? 'Float panel' : 'Dock panel');
+    }
+    if (clipsCollapseBtn) {
+        const isCollapsed = (m === 'collapsed');
+        clipsCollapseBtn.title = isCollapsed ? 'Expand panel' : 'Collapse panel';
+        clipsCollapseBtn.setAttribute('aria-label', isCollapsed ? 'Expand panel' : 'Collapse panel');
+    }
+
+    // Leaflet sometimes needs a nudge when UI moves around.
+    if (map) setTimeout(() => { try { map.invalidateSize(); } catch { } }, 150);
+}
+
+function toggleDockMode() {
+    const current = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
+    if (current === 'collapsed') {
+        // Expand to previous mode first, then toggle dock.
+        const prev = localStorage.getItem(CLIPS_PREV_MODE_KEY) || 'floating';
+        const base = (prev === 'docked') ? 'docked' : 'floating';
+        localStorage.setItem(CLIPS_MODE_KEY, base);
+        applyClipsMode(base === 'docked' ? 'floating' : 'docked');
+        return;
+    }
+    applyClipsMode(current === 'docked' ? 'floating' : 'docked');
+}
+
+function toggleCollapsedMode() {
+    const current = localStorage.getItem(CLIPS_MODE_KEY) || 'floating';
+    if (current === 'collapsed') {
+        const prev = localStorage.getItem(CLIPS_PREV_MODE_KEY) || 'floating';
+        applyClipsMode(prev);
+        return;
+    }
+    localStorage.setItem(CLIPS_PREV_MODE_KEY, current);
+    applyClipsMode('collapsed');
+}
 
 // Drag & Drop Logic for Floating Vis
 let isDragging = false;
@@ -255,6 +445,15 @@ async function handleFile(file) {
     progressBar.disabled = true;
 
     try {
+        // If multi-cam is enabled and a group is selected, route through multi loader instead.
+        if (multiCamEnabled && selectedGroupId) {
+            const g = clipGroupById.get(selectedGroupId);
+            if (g) {
+                await loadMultiCamGroup(g);
+                return;
+            }
+        }
+
         await loadMp4IntoPlayer(file);
         
         firstKeyframe = frames.findIndex(f => f.keyframe);
@@ -316,6 +515,218 @@ async function loadMp4IntoPlayer(file) {
     mp4 = new DashcamMP4(buffer);
     frames = mp4.parseFrames(seiType);
     return { mp4, frames };
+}
+
+function isMultiCamActive() {
+    return multiCamEnabled && Array.from(multiStreams.values()).some(s => s.frames?.length);
+}
+
+function setMultiCamGridVisible(visible) {
+    if (!multiCamGrid) return;
+    multiCamGrid.classList.toggle('hidden', !visible);
+    // Hide the single canvas when multi is active.
+    canvas.classList.toggle('hidden', visible);
+    if (!visible) clearMultiFocus();
+}
+
+function resetMultiStreams() {
+    for (const s of multiStreams.values()) {
+        try { s.decoder?.close?.(); } catch { /* ignore */ }
+    }
+    multiStreams.clear();
+}
+
+async function reloadSelectedGroup() {
+    const g = selectedGroupId ? clipGroupById.get(selectedGroupId) : null;
+    if (!g) {
+        setMultiCamGridVisible(false);
+        return;
+    }
+
+    pause();
+    if (multiCamEnabled) {
+        await loadMultiCamGroup(g);
+    } else {
+        setMultiCamGridVisible(false);
+        updateCameraSelect(g);
+        const cam = selectedCamera || (g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front'));
+        selectedCamera = cam;
+        cameraSelect.value = cam;
+        loadClipGroupCamera(g, cam);
+    }
+}
+
+function buildStream(camera, canvasEl) {
+    return {
+        camera,
+        canvas: canvasEl,
+        ctx: canvasEl?.getContext?.('2d') ?? null,
+        file: null,
+        buffer: null,
+        mp4: null,
+        frames: null,
+        timestamps: null, // numeric array ms
+        firstKeyframe: 0,
+        decoder: null,
+        decoding: false,
+        pendingFrame: null,
+        hasSei: false
+    };
+}
+
+function streamSetFrames(stream, mp4Obj, framesArr, hasSei) {
+    stream.mp4 = mp4Obj;
+    stream.frames = framesArr;
+    stream.timestamps = framesArr.map(f => f.timestamp);
+    stream.firstKeyframe = framesArr.findIndex(f => f.keyframe);
+    if (stream.firstKeyframe < 0) stream.firstKeyframe = 0;
+    stream.hasSei = !!hasSei;
+
+    const config = mp4Obj.getConfig();
+    if (stream.canvas) {
+        stream.canvas.width = config.width;
+        stream.canvas.height = config.height;
+    }
+}
+
+function findFrameIndexAtTime(stream, tMs) {
+    const ts = stream.timestamps;
+    if (!ts?.length) return 0;
+    // binary search for nearest <= tMs
+    let lo = 0, hi = ts.length - 1;
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi + 1) / 2);
+        if (ts[mid] <= tMs) lo = mid;
+        else hi = mid - 1;
+    }
+    return lo;
+}
+
+async function loadMultiCamGroup(group) {
+    if (!seiType) throw new Error('Metadata parser not initialized');
+
+    resetMultiStreams();
+    setMultiCamGridVisible(true);
+    clearMultiFocus();
+
+    // Build streams for UI slots (TL/TR/BL/BR) using the selected layout.
+    const layout = MULTI_LAYOUTS[multiLayoutId] || MULTI_LAYOUTS.fb_lr;
+    const slotCanvases = {
+        tl: canvasFront,
+        tr: canvasRight,
+        bl: canvasLeft,
+        br: canvasBack
+    };
+    // Update tile labels to match the layout (by slot attribute; robust for future layouts)
+    try {
+        for (const slotDef of layout.slots) {
+            const tile = multiCamGrid.querySelector(`.multi-tile[data-slot="${cssEscape(slotDef.slot)}"]`);
+            const labelEl = tile?.querySelector?.('.multi-label');
+            if (labelEl && slotDef?.label) labelEl.textContent = slotDef.label;
+        }
+    } catch { /* ignore */ }
+
+    // Create a stream per slot, keyed by slot (stable UI), with an assigned camera.
+    for (const sdef of layout.slots) {
+        const cEl = slotCanvases[sdef.slot];
+        const stream = buildStream(sdef.camera, cEl);
+        stream.slot = sdef.slot;
+        multiStreams.set(sdef.slot, stream);
+        if (stream.ctx) {
+            stream.ctx.fillStyle = '#000';
+            stream.ctx.fillRect(0, 0, cEl.width || 1, cEl.height || 1);
+        }
+    }
+
+    // Choose master camera (prefer front if available)
+    if (!group.filesByCamera.has(masterCamera)) {
+        masterCamera = group.filesByCamera.has('front') ? 'front' : (group.filesByCamera.keys().next().value || 'front');
+    }
+
+    // Update camera selector to reflect "master camera" choice in multi mode
+    updateCameraSelect(group);
+    cameraSelect.value = masterCamera;
+
+    // Load buffers + parse frames
+    // - Master camera: parse with SEI for dashboard/map
+    // - Other cameras: parse without SEI for speed
+    const loadPromises = [];
+    for (const stream of multiStreams.values()) {
+        const entry = group.filesByCamera.get(stream.camera);
+        if (!entry?.file) continue;
+        stream.file = entry.file;
+        loadPromises.push((async () => {
+            stream.buffer = await entry.file.arrayBuffer();
+            const mp4Obj = new DashcamMP4(stream.buffer);
+            const isMaster = stream.camera === masterCamera;
+            const framesArr = mp4Obj.parseFrames(isMaster ? seiType : null);
+            streamSetFrames(stream, mp4Obj, framesArr, isMaster);
+        })());
+    }
+    await Promise.all(loadPromises);
+
+    // If the master camera wasn't in the grid map (e.g. unknown camera name), ensure we have a master stream anyway.
+    const hasMaster = Array.from(multiStreams.values()).some(s => s.camera === masterCamera && s.frames?.length);
+    if (!hasMaster) {
+        const entry = group.filesByCamera.get(masterCamera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
+        if (entry?.file) {
+            const temp = buildStream(masterCamera, canvasFront);
+            temp.file = entry.file;
+            temp.buffer = await entry.file.arrayBuffer();
+            const mp4Obj = new DashcamMP4(temp.buffer);
+            const framesArr = mp4Obj.parseFrames(seiType);
+            streamSetFrames(temp, mp4Obj, framesArr, true);
+            multiStreams.set('__master__', temp);
+        }
+    }
+
+    // Promote master stream into existing single-player globals (dashboard/map/timeline reuse)
+    const mStream = Array.from(multiStreams.values()).find(s => s.camera === masterCamera && s.frames?.length) || multiStreams.get('__master__');
+    if (!mStream?.frames?.length) throw new Error('Master camera failed to load');
+    mp4 = mStream.mp4;
+    frames = mStream.frames;
+    firstKeyframe = mStream.firstKeyframe;
+
+    // UI reset similar to handleFile
+    pause();
+    if (decoder) { try { decoder.close(); } catch { } decoder = null; } // single decoder not used in multi mode
+    decoding = false;
+    pendingFrame = null;
+    playBtn.disabled = false;
+    progressBar.disabled = false;
+    dashboardVis.classList.add('visible');
+    dropOverlay.classList.add('hidden');
+
+    // Setup progress bar with master timeline
+    progressBar.min = 0;
+    progressBar.max = frames.length - 1;
+    masterTimeIndex = Math.max(firstKeyframe, 0);
+    progressBar.value = masterTimeIndex;
+
+    // Map setup from master frames
+    if (map) {
+        mapPath = [];
+        if (mapMarker) { mapMarker.remove(); mapMarker = null; }
+        if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
+        mapPath = frames
+            .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
+            .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
+        if (mapPath.length > 0) {
+            mapVis.classList.add('visible');
+            setTimeout(() => {
+                map.invalidateSize();
+                mapPolyline = L.polyline(mapPath, { color: '#3e9cbf', weight: 3, opacity: 0.7 }).addTo(map);
+                map.fitBounds(mapPolyline.getBounds(), { padding: [20, 20] });
+            }, 100);
+        } else {
+            mapVis.classList.remove('visible');
+        }
+    }
+
+    // Draw initial frame on all cameras
+    showFrame(masterTimeIndex);
+
+    if (autoplayToggle?.checked) setTimeout(() => play(), 0);
 }
 
 // -------------------------------------------------------------
@@ -549,11 +960,14 @@ function selectClipGroup(groupId) {
     selectedGroupId = groupId;
     highlightSelectedClip();
 
-    // Choose default camera: front preferred, else first available
+    // Choose default camera/master: front preferred, else first available
     const defaultCam = g.filesByCamera.has('front') ? 'front' : (g.filesByCamera.keys().next().value || 'front');
     selectedCamera = defaultCam;
+    masterCamera = masterCamera || defaultCam;
+    if (!g.filesByCamera.has(masterCamera)) masterCamera = defaultCam;
     updateCameraSelect(g);
-    loadClipGroupCamera(g, selectedCamera);
+    cameraSelect.value = multiCamEnabled ? masterCamera : selectedCamera;
+    reloadSelectedGroup();
 
     // Kick off preview for this group immediately
     ensureGroupPreview(groupId, { highPriority: true });
@@ -835,6 +1249,11 @@ document.addEventListener('keydown', (e) => {
     if (e.code === 'Space') {
         e.preventDefault();
         playing ? pause() : play();
+    } else if (e.code === 'Escape') {
+        if (multiFocusSlot) {
+            e.preventDefault();
+            clearMultiFocus();
+        }
     } else if (e.code === 'ArrowLeft') {
         pause();
         const prev = Math.max(0, +progressBar.value - 15); // ~0.5s jump
@@ -870,15 +1289,15 @@ function updatePlayButton() {
 function playNext() {
     if (!playing) return;
     let next = +progressBar.value + 1;
-    if (next >= frames.length) {
+    if (!frames || next >= frames.length) {
         pause();
         return;
     }
     progressBar.value = next;
     showFrame(next);
-    
-    // Calculate delay based on frame duration
-    const duration = frames[next].duration || 33; 
+
+    // Calculate delay based on master frame duration
+    const duration = frames[next].duration || 33;
     playTimer = setTimeout(playNext, duration);
 }
 
@@ -890,11 +1309,92 @@ function showFrame(index) {
     updateTimeDisplay(index);
 
     // Decode & Render Video
+    if (isMultiCamActive()) {
+        const t = frames[index].timestamp;
+        for (const stream of multiStreams.values()) {
+            if (stream.slot === '__master__') continue;
+            if (!stream?.frames?.length || !stream.ctx) continue;
+            const idx = findFrameIndexAtTime(stream, t);
+            streamShowFrame(stream, idx);
+        }
+        return;
+    }
+
     if (decoding) {
         pendingFrame = index;
     } else {
         decodeFrame(index);
     }
+}
+
+function streamShowFrame(stream, index) {
+    if (!stream.frames?.[index]) return;
+    if (stream.decoding) {
+        stream.pendingFrame = index;
+    } else {
+        streamDecodeFrame(stream, index);
+    }
+}
+
+async function streamDecodeFrame(stream, index) {
+    stream.decoding = true;
+    try {
+        let keyIdx = index;
+        while (keyIdx >= 0 && !stream.frames[keyIdx].keyframe) keyIdx--;
+        if (keyIdx < 0) return;
+
+        if (stream.decoder) try { stream.decoder.close(); } catch { }
+        const targetCount = index - keyIdx + 1;
+        let count = 0;
+
+        await new Promise((resolve, reject) => {
+            stream.decoder = new VideoDecoder({
+                output: frame => {
+                    count++;
+                    if (count === targetCount) {
+                        stream.ctx.drawImage(frame, 0, 0);
+                    }
+                    frame.close();
+                    if (count >= targetCount) resolve();
+                },
+                error: reject
+            });
+
+            const config = stream.mp4.getConfig();
+            stream.decoder.configure({
+                codec: config.codec,
+                width: config.width,
+                height: config.height
+            });
+
+            for (let i = keyIdx; i <= index; i++) {
+                stream.decoder.decode(createChunkForStream(stream, stream.frames[i]));
+            }
+            stream.decoder.flush().catch(reject);
+        });
+    } catch (e) {
+        // keep quiet; decode errors can happen during rapid scrubs
+    } finally {
+        stream.decoding = false;
+        if (stream.pendingFrame !== null) {
+            const next = stream.pendingFrame;
+            stream.pendingFrame = null;
+            streamDecodeFrame(stream, next);
+        }
+    }
+}
+
+function createChunkForStream(stream, frame) {
+    const sc = new Uint8Array([0, 0, 0, 1]);
+    const config = stream.mp4.getConfig();
+    const data = frame.keyframe
+        ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
+        : DashcamMP4.concat(sc, frame.data);
+    return new EncodedVideoChunk({
+        type: frame.keyframe ? 'key' : 'delta',
+        timestamp: frame.timestamp * 1000,
+        data
+    });
 }
 
 async function decodeFrame(index) {

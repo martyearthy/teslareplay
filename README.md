@@ -10,6 +10,16 @@ Original code from Tesla: https://github.com/teslamotors/dashcam
 
 - **Local Video Playback**: Uses the browser's native `VideoDecoder` API to play MP4 files frame-by-frame.
 - **Privacy-First**: All processing happens locally in your browser. No video or telemetry data is uploaded to any server.
+- **TeslaCam Folder Support**:
+  - Drop your entire `TeslaCam/` folder (or choose it in the UI) instead of picking single files.
+  - Automatically groups per-camera clips into a single “clip group” by timestamp.
+  - Tags clip groups by folder (e.g. `RecentClips`, `SentryClips`, `SavedClips`) and Sentry event folder when present.
+- **Clip Browser + Previews**:
+  - Sidebar clip list with **lazy** thumbnail generation and a **mini route preview** (from SEI GPS) when available.
+  - Designed to scale to large folders without eagerly loading every MP4 into memory at once.
+- **Multi‑Camera Playback (2×2 grid)**:
+  - Plays up to 4 cameras in sync (Front/Back/Left/Right) using WebCodecs decoding per camera.
+  - Layout presets + per-tile focus mode for quick inspection.
 - **Telemetry Visualization**:
   - **Speed**: Current vehicle speed in MPH.
   - **Gear Indicator**: Park, Reverse, Neutral, Drive.
@@ -48,12 +58,31 @@ The easiest workflow is to give Tesla Replay the **entire `TeslaCam/` folder** f
 
 4. **Play**
    - Click a clip row to load it.
-   - Use **Autoplay** (toggle in the control bar) to automatically start playback whenever you:
+   - Use **Autoplay** (toggle in the control bar, default ON) to automatically start playback whenever you:
      - select a different clip group
      - switch camera angles
      - load a single MP4
    - Use **Play/Pause** or `Spacebar` to toggle playback.
    - Use the scrubber or `Left/Right Arrow` keys to jump through frames.
+
+### Multi‑Camera Playback (2×2)
+Tesla Replay includes a synced **multi-camera** mode which is ideal for reviewing a moment across all angles.
+
+- **Enable/disable**: Use the **Multi** toggle in the control bar (default ON).
+- **What you see**: A 2×2 grid that shows up to 4 camera feeds simultaneously.
+- **Layout presets**:
+  - **F/B/L/R** = Front, Back, Left Repeater, Right Repeater
+  - **F/B/R/L** = Front, Back, Right Repeater, Left Repeater
+  - Use the dropdown and the two quick-switch icon buttons next to it to swap instantly.
+- **Master camera**:
+  - In Multi mode, the **Camera dropdown selects the “master camera”**.
+  - The master camera drives:
+    - the scrubber timeline
+    - the dashboard telemetry
+    - the map route and current position marker
+- **Focus mode per tile**:
+  - Click any tile to **enlarge** it.
+  - Click again or press **Esc** to return to the 2×2 grid.
 
 ### TeslaCam Folder Structure Notes
 Tesla Replay expects the common Tesla USB structure:
@@ -78,6 +107,15 @@ Use the **Camera** dropdown in the control bar to switch between angles for the 
 
 - If **Autoplay** is ON (default), switching cameras will immediately start playing the newly loaded camera file.
 - If a clip group is missing an angle, it will only show the available cameras.
+
+### Clips Panel Modes (Controls/Settings Panel)
+The “Clips” panel is intended to be both a clip browser and a control/settings surface. You can choose how it behaves:
+
+- **Floating**: Panel floats in the upper-left over the video area (good for large screens).
+- **Docked**: Panel docks to the left edge and **does not occlude video playback**.
+- **Collapsed**: Panel shrinks to a small, unobtrusive button you can expand later.
+
+These modes are toggled from the panel header (Dock/Float and Collapse/Expand) and are remembered across reloads.
 
 ### Dashboard + Map
 - The **Dashboard** window shows speed, gear, turn signals, steering wheel angle, Autopilot state, and pedal/brake indicators.
@@ -104,7 +142,7 @@ Use the **Camera** dropdown in the control bar to switch between angles for the 
 ### High-Level Architecture
 Tesla Replay is intentionally “no build step”: **vanilla HTML/CSS/JS** with Web APIs.
 
-There are two major subsystems:
+There are three major subsystems:
 
 1. **Playback + telemetry (single MP4)**
    - Parses an MP4 into frames with timestamps and attached SEI
@@ -117,17 +155,25 @@ There are two major subsystems:
    - Renders a sidebar list with **lazy previews** (thumbnail + mini route)
    - Loads a selected group + camera into the existing single-MP4 playback pipeline
 
+3. **Multi-camera playback (Step 6)**
+   - Loads multiple camera MP4s for a clip group simultaneously
+   - Runs per-camera WebCodecs decode pipelines and synchronizes them by timestamp
+   - Keeps dashboard + map tied to a “master camera” timeline
+   - Supports layout presets and a per-tile focus mode
+
 ### Repository Layout (Key Files)
 - **`index.html`**
   - App shell + DOM structure (canvas, controls, floating panels)
   - UI hooks for folder and file selection (`#folderInput`, `#fileInput`)
   - Clip browser container (`#clipBrowser`) and list (`#clipList`)
   - Autoplay toggle (`#autoplayToggle`) and camera selector (`#cameraSelect`)
+  - Multi-cam UI (`#multiCamGrid`, `#multiCamToggle`, `#multiLayoutSelect`, layout quick switch buttons)
 
 - **`style.css`**
   - Dark UI styling and glassmorphism
   - Clip browser sidebar styles (list rows, badges, thumbnail + minimap tiles)
-  - Small unobtrusive info button linking to GitHub
+  - Multi-cam grid + focus-mode styling
+  - Docked/collapsed panel layouts
 
 - **`script.js`** (core runtime)
   - **Initialization**
@@ -142,6 +188,12 @@ There are two major subsystems:
     - Generates clip row thumbnails + minimaps lazily as rows scroll into view
   - **Autoplay**
     - When enabled, any load action triggers playback automatically
+  - **UI persistence**
+    - Clips panel mode (floating/docked/collapsed)
+    - Multi-cam enabled state + layout preset
+  - **Multi-cam**
+    - Per-slot stream objects with their own `VideoDecoder`
+    - Timestamp alignment across cameras + per-tile focus mode
 
 - **`dashcam-mp4.js`**
   - **`DashcamMP4`**: parses MP4 atoms and returns video configuration + frame stream
@@ -221,24 +273,39 @@ Autoplay is controlled by `#autoplayToggle` (default ON).
 - If enabled, after a file is loaded and the first frame is shown, the app calls `play()`.
 - This means selecting a different clip group or switching camera angles will immediately start playback.
 
+### Multi‑Camera (Implementation Details)
+Multi-camera mode lives entirely in the frontend (no server-side work).
+
+#### Concepts
+- **Slots vs cameras**:
+  - The grid is treated as a set of **UI slots** (`tl`, `tr`, `bl`, `br`), each mapped to a camera key.
+  - Layout presets are configured in `script.js` as `MULTI_LAYOUTS`.
+  - This design intentionally makes it easy to add future layouts (including 6-camera) without rewriting sync logic.
+
+- **Master camera**
+  - Dashboard + map + timeline use the master camera’s `frames[]`.
+  - Other cameras use frame index mapping by timestamp.
+
+#### Sync strategy
+- For each master frame at time `t`, each non-master stream finds the nearest frame index where:
+  - `stream.frames[idx].timestamp <= t` (binary search over a cached timestamp array)
+- Each stream decodes from its nearest preceding keyframe up to the target frame (simple, correct baseline).
+
+#### Focus mode
+- Focus is purely UI:
+  - A CSS class (`.multi-cam-grid.focused`) and a `data-focus-slot` attribute choose which tile is displayed.
+  - `Esc` clears focus.
+
+### UI State Persistence (localStorage keys)
+Tesla Replay persists several UX choices so the app feels “sticky”:
+
+- `teslareplay.ui.clipsMode`: `floating` | `docked` | `collapsed`
+- `teslareplay.ui.clipsPrevMode`: last non-collapsed mode
+- `teslareplay.ui.multiEnabled`: `"1"` | `"0"`
+- `teslareplay.ui.multiLayout`: `fb_lr` | `fb_rl`
+
 ### Running Locally
 Because the app uses `fetch('dashcam.proto')` and WebCodecs can require a secure context, run via a local server:
-
-**Python 3:**
-```bash
-python3 -m http.server
-```
-
-**Node.js (http-server):**
-```bash
-npx http-server .
-```
-
-Then open `http://localhost:8000` (or the port shown in your terminal).
-
-### Running Locally
-
-Because the application uses `fetch` to load the `.proto` file and `VideoDecoder` which requires a secure context (or localhost), you must run it via a local web server.
 
 **Python 3:**
 ```bash
@@ -296,13 +363,33 @@ If you are building your own parser or modifying this one, pay attention to thes
    - **Steering Angle**: The raw value is in degrees.
    - **Acceleration**: The IMU values (`linear_acceleration_mps2`) are in meters per second squared ($m/s^2$).
 
+5. **Folder ingest is not “one API fits all”**
+   - Drag/drop folder traversal relies on `DataTransferItem.webkitGetAsEntry()` which is not consistently supported across all browsers/versions.
+   - Folder picking uses `<input webkitdirectory>`, which is widely supported in Chromium and works in Safari depending on version.
+   - **Practical takeaway**: support both, treat paths as “best effort”, and never assume the presence of a stable relative path.
+
+6. **Thumbnails from `<video>` can be flaky**
+   - Some browsers won’t produce a drawable frame immediately after `loadeddata`.
+   - The thumbnail implementation is more robust when it:
+     - waits for `loadedmetadata`
+     - seeks slightly forward
+     - waits for an actual decoded frame (`requestVideoFrameCallback` when available)
+   - **Fallback**: decoding the first keyframe via WebCodecs is significantly more reliable for local Tesla MP4s.
+
+7. **Multi-camera decode cost is real**
+   - The “decode from keyframe to target frame” approach is simple and correct, but it can be CPU-heavy when scrubbing.
+   - For future optimization:
+     - cache decoded frames around the current time window
+     - avoid recreating `VideoDecoder` for small seeks
+     - consider a per-stream “decoder warm state” and smarter flush strategy
+     - downscale decode outputs for multi-cam tiles (if/when WebCodecs scaling fits the target browsers)
+
 ### Design Notes for Future Work (Multi-Camera + Export)
 This repo is now structured so future features plug in cleanly:
 
-- **Multi-camera playback (planned “Step 6”)**
-  - `ClipGroup` already stores per-camera files; the next step is to decode N canvases in parallel.
-  - The existing “decode from keyframe to target frame” approach can be applied per camera.
-  - A “master timeline” can drive all camera decoders, with per-file frame alignment (nearest timestamp).
+- **6-camera playback layouts (planned)**
+  - Newer vehicles/firmware may include additional cameras (e.g., left/right pillar feeds).
+  - The multi-cam system is already slot/layout driven; adding a 3×2 grid is mostly UI + layout config work.
 
 - **Export (planned)**
   - SEI extraction already exists (`DashcamMP4.extractSeiMessages()`).
