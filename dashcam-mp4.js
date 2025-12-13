@@ -330,7 +330,18 @@ window.DashcamMP4 = DashcamMP4;
         async function traverse(entry) {
             if (entry.isFile) {
                 const file = await new Promise((res, rej) => entry.file(res, rej));
-                if (file.name.toLowerCase().endsWith('.mp4')) files.push(file);
+                if (file.name.toLowerCase().endsWith('.mp4')) {
+                    // Preserve best-effort relative path info for downstream grouping.
+                    // - `entry.fullPath` typically includes leading "/" and the root directory name.
+                    // - We store it as a non-enumerable property to avoid surprising consumers.
+                    try {
+                        Object.defineProperty(file, '_teslaPath', {
+                            value: entry.fullPath || null,
+                            enumerable: false
+                        });
+                    } catch { /* ignore */ }
+                    files.push(file);
+                }
             } else if (entry.isDirectory) {
                 const reader = entry.createReader();
                 const children = await new Promise((res, rej) => reader.readEntries(res, rej));

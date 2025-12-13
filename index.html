@@ -18,11 +18,32 @@
                         <polyline points="17 8 12 3 7 8"></polyline>
                         <line x1="12" y1="3" x2="12" y2="15"></line>
                     </svg>
-                    <p>Drop Tesla Dashcam MP4 here</p>
+                    <p>Drop a TeslaCam folder, or choose one to browse</p>
+                    <div class="drop-actions">
+                        <button id="overlayChooseFolderBtn" class="mini-btn">Choose Folder</button>
+                        <button id="overlayChooseFileBtn" class="mini-btn">Choose MP4</button>
+                    </div>
                 </div>
                 <input type="file" id="fileInput" accept="video/mp4">
+                <input type="file" id="folderInput" webkitdirectory multiple>
             </div>
             <canvas id="videoCanvas"></canvas>
+
+            <!-- Clip Browser (Folder Mode) -->
+            <div id="clipBrowser" class="clip-browser">
+                <div class="clip-browser-header">
+                    <div class="clip-browser-title">
+                        <div class="clip-browser-title-main">Clips</div>
+                        <div id="clipBrowserSubtitle" class="clip-browser-subtitle">Drop a TeslaCam folder to browse</div>
+                    </div>
+                    <div class="clip-browser-actions">
+                        <a class="info-link" href="https://github.com/martyearthy/teslareplay" target="_blank" rel="noopener noreferrer" aria-label="Open TeslaReplay on GitHub" title="GitHub">i</a>
+                        <button id="chooseFolderBtn" class="mini-btn" title="Choose TeslaCam folder">Folder</button>
+                        <button id="chooseFileBtn" class="mini-btn" title="Choose a single MP4">MP4</button>
+                    </div>
+                </div>
+                <div id="clipList" class="clip-list"></div>
+            </div>
             
             <!-- Floating Map -->
             <div id="mapVis" class="map-vis">
@@ -128,6 +149,17 @@
                     <path d="M8 5v14l11-7z"/>
                 </svg>
             </button>
+            <label class="toggle">
+                <input type="checkbox" id="autoplayToggle" checked>
+                <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                <span class="toggle-label">Autoplay</span>
+            </label>
+            <select id="cameraSelect" class="camera-select" disabled title="Camera">
+                <option value="front">Front</option>
+                <option value="back">Back</option>
+                <option value="left_repeater">Left</option>
+                <option value="right_repeater">Right</option>
+            </select>
             <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0" disabled>
             <div class="time-display" id="timeDisplay">00:00</div>
         </div>

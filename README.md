@@ -27,15 +27,73 @@ https://x.com/MartyEarthy/highlights
 
 ## For Users
 
-### How to Use
-1. **Launch the App**: Open the `index.html` file in your browser. 
-   > **Note**: Due to browser security restrictions on local files, you typically need to serve this file via a local web server (see below) rather than double-clicking it.
-2. **Load Video**: Drag and drop a Tesla dashcam MP4 file onto the window, or click the drop zone to select a file.
-3. **Playback**: 
-   - Use the Play/Pause button or `Spacebar` to toggle playback.
-   - Use the slider or `Left/Right Arrow` keys to scrub through the video.
-   - **Visualizations**: Both the Dashboard (speed/steering) and the Map are floating windows. Click and drag the handle (`:::`) at the top of either window to rearrange your layout.
-   - Click the chevron at the bottom of the dashboard to view detailed sensor data.
+### Quick Start (Recommended)
+The easiest workflow is to give Tesla Replay the **entire `TeslaCam/` folder** from your USB stick.
+
+1. **Launch the app**
+   - Use the hosted version: [**martyearthy.github.io/teslareplay**](https://martyearthy.github.io/teslareplay/)
+   - Or run locally (see “Running Locally” below).
+
+2. **Load your TeslaCam folder (best experience)**
+   - **Drag & drop** the `TeslaCam/` folder onto the app, **or**
+   - Click the drop zone and choose **Choose Folder**, **or**
+   - Use the sidebar “Clips” panel and click **Folder**.
+
+3. **Browse clips**
+   - The left sidebar shows **clip groups** (a single timestamp with multiple camera angles).
+   - Each row will progressively fill in:
+     - a **thumbnail** preview
+     - a **minimap route preview** (from SEI GPS, when present)
+     - badges like `RecentClips` / `SentryClips` / `SavedClips` (depending on folder structure)
+
+4. **Play**
+   - Click a clip row to load it.
+   - Use **Autoplay** (toggle in the control bar) to automatically start playback whenever you:
+     - select a different clip group
+     - switch camera angles
+     - load a single MP4
+   - Use **Play/Pause** or `Spacebar` to toggle playback.
+   - Use the scrubber or `Left/Right Arrow` keys to jump through frames.
+
+### TeslaCam Folder Structure Notes
+Tesla Replay expects the common Tesla USB structure:
+
+- `TeslaCam/RecentClips/*.mp4`
+- `TeslaCam/SentryClips/<event-id>/*.mp4`
+- `TeslaCam/SavedClips/...` (supported if present)
+
+Within each folder, Tesla typically writes per-camera files named like:
+
+- `YYYY-MM-DD_HH-MM-SS-front.mp4`
+- `YYYY-MM-DD_HH-MM-SS-back.mp4`
+- `YYYY-MM-DD_HH-MM-SS-left_repeater.mp4`
+- `YYYY-MM-DD_HH-MM-SS-right_repeater.mp4`
+
+Tesla Replay groups these into a single **clip group** by the shared timestamp (`YYYY-MM-DD_HH-MM-SS`) plus the parent folder tag (and Sentry “event folder” when present).
+
+> Note: Some Sentry event folders include `event.mp4` and `event.json`. Tesla Replay currently focuses on the per-camera feeds; `event.mp4` is ignored.
+
+### Camera Angle Switching
+Use the **Camera** dropdown in the control bar to switch between angles for the currently selected clip group.
+
+- If **Autoplay** is ON (default), switching cameras will immediately start playing the newly loaded camera file.
+- If a clip group is missing an angle, it will only show the available cameras.
+
+### Dashboard + Map
+- The **Dashboard** window shows speed, gear, turn signals, steering wheel angle, Autopilot state, and pedal/brake indicators.
+- The **Map** window shows the driven route when GPS is present in SEI and tracks your current position during playback.
+- Both the Dashboard and Map windows are draggable by the top handle (`:::`).
+
+### Requirements / Compatibility
+- **Browser**: modern Safari/Chrome/Edge with WebCodecs `VideoDecoder` support.
+- **Videos**: Tesla dashcam MP4 files.
+- **SEI data**: full telemetry requires Tesla firmware **2025.44.25+** and **HW3+**. If the car is parked, SEI may be missing even in supported firmware.
+
+### Troubleshooting
+- **Nothing loads when I click the page**: If you opened `index.html` directly from disk, your browser may block fetching `dashcam.proto`.
+  - Run via a local web server (see below) or use the hosted version.
+- **Clip list appears but no minimap**: Not all clips contain GPS/SEI; some may be parked clips or older firmware.
+- **Folder selection doesn’t show subfolders**: Folder picking uses `webkitdirectory` (widely supported in Chromium; Safari support can vary by version). Drag & drop of the folder is often the most reliable.
 
 ### Requirements
 - A modern web browser (Chrome, Edge, Safari, Firefox) with support for the `VideoDecoder` API.
@@ -43,24 +101,140 @@ https://x.com/MartyEarthy/highlights
 
 ## For Developers
 
-### Architecture
+### High-Level Architecture
+Tesla Replay is intentionally “no build step”: **vanilla HTML/CSS/JS** with Web APIs.
 
-The application is built with vanilla HTML, CSS, and JavaScript, requiring no build step or complex framework.
+There are two major subsystems:
 
-- **`index.html`**: The application shell containing the video canvas and overlay DOM structure.
-- **`style.css`**: Contains all styling, including dark mode UI, animations, and glassmorphism effects for floating windows.
-- **`script.js`**: The core application logic:
-  - Initializes `protobuf.js` to define the SEI metadata structure.
-  - Initializes **Leaflet.js** for the mapping visualization.
-  - Manages the UI state (play/pause, generic drag-and-drop system for floating windows).
-  - Uses the `VideoDecoder` API to decode raw video frames.
-  - Synchronizes frame rendering with metadata updates and map marker positions.
-- **`dashcam-mp4.js`**: A utility class responsible for:
-  - Parsing the MP4 container (finding atoms/boxes like `moov`, `mdat`).
-  - Extracting raw H.264/AVC streams.
-  - Parsing SEI NAL units from the video stream.
-  - Stripping emulation prevention bytes from NAL units.
-- **`dashcam.proto`**: The Protocol Buffers definition file used to decode the binary SEI payloads into readable JavaScript objects.
+1. **Playback + telemetry (single MP4)**
+   - Parses an MP4 into frames with timestamps and attached SEI
+   - Decodes frames using **WebCodecs** and draws them to `<canvas>`
+   - Updates dashboard + map in lockstep with the currently displayed frame
+
+2. **TeslaCam folder ingest + clip browser (Phase 1)**
+   - Accepts a folder of MP4s
+   - Indexes them into timestamp-based **clip groups** with multiple cameras
+   - Renders a sidebar list with **lazy previews** (thumbnail + mini route)
+   - Loads a selected group + camera into the existing single-MP4 playback pipeline
+
+### Repository Layout (Key Files)
+- **`index.html`**
+  - App shell + DOM structure (canvas, controls, floating panels)
+  - UI hooks for folder and file selection (`#folderInput`, `#fileInput`)
+  - Clip browser container (`#clipBrowser`) and list (`#clipList`)
+  - Autoplay toggle (`#autoplayToggle`) and camera selector (`#cameraSelect`)
+
+- **`style.css`**
+  - Dark UI styling and glassmorphism
+  - Clip browser sidebar styles (list rows, badges, thumbnail + minimap tiles)
+  - Small unobtrusive info button linking to GitHub
+
+- **`script.js`** (core runtime)
+  - **Initialization**
+    - Leaflet map setup
+    - Protobuf initialization via `DashcamHelpers.initProtobuf()`
+  - **Folder ingest + indexing**
+    - Builds a list of `clipGroups` from many MP4 files
+    - Handles folder drag/drop and folder picker input
+  - **Playback**
+    - Loads an MP4 into `DashcamMP4`, parses frames + SEI, and drives WebCodecs decoding
+  - **Preview pipeline**
+    - Generates clip row thumbnails + minimaps lazily as rows scroll into view
+  - **Autoplay**
+    - When enabled, any load action triggers playback automatically
+
+- **`dashcam-mp4.js`**
+  - **`DashcamMP4`**: parses MP4 atoms and returns video configuration + frame stream
+  - SEI parsing helpers (detect “user data unregistered” payload and decode protobuf)
+  - `DashcamHelpers` utilities:
+    - `initProtobuf()` loads `dashcam.proto` and initializes protobuf decoding with `{ keepCase: true }`
+    - `getFilesFromDataTransfer()` recursively reads a dropped folder
+
+- **`dashcam.proto`**
+  - Protobuf schema (`SeiMetadata`) for decoding telemetry.
+
+### Data Flow (Single MP4 Playback)
+1. User selects an MP4 (directly or via clip group selection).
+2. `handleFile(file)` loads the file into memory (`ArrayBuffer`) and constructs `DashcamMP4`.
+3. `DashcamMP4.parseFrames(seiType)` returns `frames[]`, where each frame includes:
+   - `timestamp` (ms)
+   - `duration` (ms, derived from MP4 `stts`)
+   - `keyframe` (true for IDR)
+   - `data` (H.264 NAL payload)
+   - `sei` (decoded protobuf message, or null)
+4. `showFrame(index)` updates:
+   - Dashboard + map using `frames[index].sei`
+   - Canvas using WebCodecs decoding from the nearest preceding keyframe
+
+### TeslaCam Folder Ingest (Clip Browser)
+Folder ingest is designed to be “metadata-first” and scalable:
+
+- **Goal**: don’t load/parse 200 MP4s eagerly; instead:
+  - index quickly from filenames/paths
+  - generate previews lazily per row
+
+#### Clip grouping rules
+TeslaCam folders contain many MP4s that are logically one “moment” in time across cameras.
+
+- **ClipGroup key**:
+  - `tag` (folder under `TeslaCam`, e.g. `RecentClips`, `SentryClips`, `SavedClips`)
+  - `eventId` (Sentry only; event folder name)
+  - `timestampKey` from filename: `YYYY-MM-DD_HH-MM-SS`
+
+- **Cameras** are identified from the filename suffix:
+  - `front`, `back`, `left_repeater`, `right_repeater` (unknown suffixes are preserved as-is)
+
+In `script.js`, each clip group is stored with:
+- `filesByCamera: Map<camera, ClipFile>`
+- `id: string` used as the stable UI key
+
+#### Folder selection mechanisms
+Folder ingest supports multiple browser paths:
+
+1. **Drag & drop folder**
+   - Uses `DataTransferItem.webkitGetAsEntry()` (Chromium-based browsers, some Safari builds)
+   - Implemented by `DashcamHelpers.getFilesFromDataTransfer()`
+   - To help grouping, the helper stores `entry.fullPath` onto the `File` as a non-enumerable `_teslaPath` field.
+
+2. **Folder picker**
+   - Uses `<input type="file" webkitdirectory multiple>`
+   - Provides `file.webkitRelativePath` which is ideal for deriving tag/event folders.
+
+If neither is available, you can still load individual MP4s.
+
+### Preview Generation (Thumbnail + Mini Route)
+The clip list generates previews lazily using `IntersectionObserver`:
+
+- **Minimap**
+  - Reads SEI messages from a representative file (prefers `front`)
+  - Extracts GPS points and down-samples them for a tiny canvas route preview
+
+- **Thumbnail**
+  1. Best effort snapshot via an off-DOM `<video>` element
+  2. Fallback to WebCodecs decoding of the first keyframe directly from MP4 bytes (more reliable)
+
+Previews are cached in-memory and generated with a small concurrency limit to keep the UI responsive.
+
+### Autoplay Behavior
+Autoplay is controlled by `#autoplayToggle` (default ON).
+
+- If enabled, after a file is loaded and the first frame is shown, the app calls `play()`.
+- This means selecting a different clip group or switching camera angles will immediately start playback.
+
+### Running Locally
+Because the app uses `fetch('dashcam.proto')` and WebCodecs can require a secure context, run via a local server:
+
+**Python 3:**
+```bash
+python3 -m http.server
+```
+
+**Node.js (http-server):**
+```bash
+npx http-server .
+```
+
+Then open `http://localhost:8000` (or the port shown in your terminal).
 
 ### Running Locally
 
@@ -121,3 +295,18 @@ If you are building your own parser or modifying this one, pay attention to thes
 4. **Coordinate Systems**:
    - **Steering Angle**: The raw value is in degrees.
    - **Acceleration**: The IMU values (`linear_acceleration_mps2`) are in meters per second squared ($m/s^2$).
+
+### Design Notes for Future Work (Multi-Camera + Export)
+This repo is now structured so future features plug in cleanly:
+
+- **Multi-camera playback (planned “Step 6”)**
+  - `ClipGroup` already stores per-camera files; the next step is to decode N canvases in parallel.
+  - The existing “decode from keyframe to target frame” approach can be applied per camera.
+  - A “master timeline” can drive all camera decoders, with per-file frame alignment (nearest timestamp).
+
+- **Export (planned)**
+  - SEI extraction already exists (`DashcamMP4.extractSeiMessages()`).
+  - Export formats to consider:
+    - CSV per clip or per folder
+    - GPX/GeoJSON for route paths
+    - “event summaries” for Sentry clips
