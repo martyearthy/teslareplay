@@ -29,9 +29,9 @@
             </div>
             <canvas id="videoCanvas"></canvas>
 
-            <!-- Multi-camera grid (supports 2×2 and 3×2 layouts) -->
+            <!-- Multi-camera grid (supports 2×2, 3×2, and immersive layouts) -->
             <div id="multiCamGrid" class="multi-cam-grid hidden" aria-label="Multi-camera view">
-                <!-- Top row -->
+                <!-- Grid tiles (for standard layouts) -->
                 <div class="multi-tile" data-slot="tl">
                     <div class="multi-label">Front</div>
                     <canvas id="canvasTL"></canvas>
@@ -44,7 +44,6 @@
                     <div class="multi-label">Right</div>
                     <canvas id="canvasTR"></canvas>
                 </div>
-                <!-- Bottom row -->
                 <div class="multi-tile" data-slot="bl">
                     <div class="multi-label">Left</div>
                     <canvas id="canvasBL"></canvas>
@@ -56,6 +55,31 @@
                 <div class="multi-tile" data-slot="br">
                     <div class="multi-label">Back</div>
                     <canvas id="canvasBR"></canvas>
+                </div>
+
+                <!-- Immersive mode tiles (hidden in standard layouts) -->
+                <div class="immersive-main" data-slot="main">
+                    <canvas id="canvasMain"></canvas>
+                </div>
+                <div class="immersive-overlay" data-slot="overlay_tl">
+                    <div class="multi-label">L Pillar</div>
+                    <canvas id="canvasOverlayTL"></canvas>
+                </div>
+                <div class="immersive-overlay" data-slot="overlay_tr">
+                    <div class="multi-label">R Pillar</div>
+                    <canvas id="canvasOverlayTR"></canvas>
+                </div>
+                <div class="immersive-overlay" data-slot="overlay_bl">
+                    <div class="multi-label">L Rep</div>
+                    <canvas id="canvasOverlayBL"></canvas>
+                </div>
+                <div class="immersive-overlay" data-slot="overlay_bc">
+                    <div class="multi-label">Back</div>
+                    <canvas id="canvasOverlayBC"></canvas>
+                </div>
+                <div class="immersive-overlay" data-slot="overlay_br">
+                    <div class="multi-label">R Rep</div>
+                    <canvas id="canvasOverlayBR"></canvas>
                 </div>
             </div>
 
@@ -292,6 +316,8 @@
                 <span class="toggle-label">Map</span>
             </label>
             <select id="multiLayoutSelect" class="camera-select" title="Multi-camera layout" aria-label="Multi-camera layout">
+                <option value="immersive">Immersive</option>
+                <option value="immersive_swap">Immersive (Swap)</option>
                 <option value="six_default">Pillars Top</option>
                 <option value="six_repeaters_top">Repeaters Top</option>
                 <option value="six_fb_first">F/B First</option>
@@ -299,6 +325,16 @@
                 <option value="fb_rl">4-cam F/B/R/L</option>
             </select>
             <div class="layout-quick" aria-label="Layout quick switch">
+                <button id="layoutBtnImmersive" class="icon-btn icon-btn--sm" type="button" aria-label="Immersive Layout" title="Immersive (Front full-screen)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="2" y="2" width="20" height="20" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                        <rect x="3" y="3" width="5" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                        <rect x="16" y="3" width="5" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                        <rect x="3" y="17" width="5" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                        <rect x="9" y="17" width="6" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                        <rect x="16" y="17" width="5" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                    </svg>
+                </button>
                 <button id="layoutBtnDefault" class="icon-btn icon-btn--sm" type="button" aria-label="Pillars Top Layout" title="Pillars Top / Repeaters Bottom">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M2 4h6v7H2V4zm7 0h6v7H9V4zm7 0h6v7h-6V4zM2 13h6v7H2v-7zm7 0h6v7H9v-7zm7 0h6v7h-6v-7z"></path>

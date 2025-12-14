@@ -52,6 +52,7 @@ const multiCamToggle = $('multiCamToggle');
 const dashboardToggle = $('dashboardToggle');
 const mapToggle = $('mapToggle');
 const multiLayoutSelect = $('multiLayoutSelect');
+const layoutBtnImmersive = $('layoutBtnImmersive');
 const layoutBtnDefault = $('layoutBtnDefault');
 const layoutBtnRepeatersTop = $('layoutBtnRepeatersTop');
 const multiCamGrid = $('multiCamGrid');
@@ -62,6 +63,13 @@ const canvasTR = $('canvasTR');
 const canvasBL = $('canvasBL');
 const canvasBC = $('canvasBC');
 const canvasBR = $('canvasBR');
+// Canvas elements for immersive layout
+const canvasMain = $('canvasMain');
+const canvasOverlayTL = $('canvasOverlayTL');
+const canvasOverlayTR = $('canvasOverlayTR');
+const canvasOverlayBL = $('canvasOverlayBL');
+const canvasOverlayBC = $('canvasOverlayBC');
+const canvasOverlayBR = $('canvasOverlayBR');
 
 // Visualization Elements
 const speedValue = $('speedValue');
@@ -210,14 +218,26 @@ const MPS_TO_MPH = 2.23694;
     }
 
     // Layout quick switch buttons
+    if (layoutBtnImmersive) layoutBtnImmersive.onclick = (e) => { 
+        e.preventDefault(); 
+        // Toggle between immersive and immersive_swap
+        if (multi.layoutId === 'immersive') {
+            setMultiLayout('immersive_swap');
+        } else {
+            setMultiLayout('immersive');
+        }
+    };
     if (layoutBtnDefault) layoutBtnDefault.onclick = (e) => { e.preventDefault(); setMultiLayout('six_default'); };
     if (layoutBtnRepeatersTop) layoutBtnRepeatersTop.onclick = (e) => { e.preventDefault(); setMultiLayout('six_repeaters_top'); };
     updateMultiLayoutButtons();
 
-    // Multi focus mode (click a tile)
+    // Multi focus mode (click a tile - works for both standard and immersive layouts)
     if (multiCamGrid) {
         multiCamGrid.addEventListener('click', (e) => {
-            const tile = e.target.closest?.('.multi-tile');
+            // Handle both standard tiles and immersive overlays/main
+            const tile = e.target.closest?.('.multi-tile') 
+                      || e.target.closest?.('.immersive-overlay')
+                      || e.target.closest?.('.immersive-main');
             if (!tile) return;
             const slot = tile.getAttribute('data-slot');
             if (!slot) return;
@@ -264,16 +284,29 @@ function setMultiLayout(layoutId) {
     if (multiLayoutSelect) multiLayoutSelect.value = next;
     updateMultiLayoutButtons();
 
-    // Set grid column mode for the new layout
+    // Set grid column mode and layout type for the new layout
     const layout = MULTI_LAYOUTS[next];
     if (multiCamGrid && layout) {
         multiCamGrid.setAttribute('data-columns', layout.columns || 3);
+        // Set layout type for immersive mode CSS
+        if (layout.type === 'immersive') {
+            multiCamGrid.setAttribute('data-layout-type', 'immersive');
+            // Set overlay opacity as CSS variable
+            multiCamGrid.style.setProperty('--immersive-opacity', layout.overlayOpacity || 0.9);
+        } else {
+            multiCamGrid.removeAttribute('data-layout-type');
+            multiCamGrid.style.removeProperty('--immersive-opacity');
+        }
     }
 
     if (multi.enabled) reloadSelectedGroup();
 }
 
 function updateMultiLayoutButtons() {
+    if (layoutBtnImmersive) {
+        layoutBtnImmersive.classList.toggle('active', multi.layoutId === 'immersive' || multi.layoutId === 'immersive_swap');
+        layoutBtnImmersive.classList.toggle('swapped', multi.layoutId === 'immersive_swap');
+    }
     if (layoutBtnDefault) layoutBtnDefault.classList.toggle('active', multi.layoutId === 'six_default');
     if (layoutBtnRepeatersTop) layoutBtnRepeatersTop.classList.toggle('active', multi.layoutId === 'six_repeaters_top');
 }
@@ -622,23 +655,44 @@ async function loadMultiCamGroup(group, opts = {}) {
 
     // Build streams for UI slots using the selected layout.
     const layout = MULTI_LAYOUTS[multi.layoutId] || MULTI_LAYOUTS[DEFAULT_MULTI_LAYOUT];
+    const isImmersive = layout.type === 'immersive';
+    
+    // Slot-to-canvas mapping for standard and immersive layouts
     const slotCanvases = {
+        // Standard grid slots
         tl: canvasTL,
         tc: canvasTC,
         tr: canvasTR,
         bl: canvasBL,
         bc: canvasBC,
-        br: canvasBR
+        br: canvasBR,
+        // Immersive slots
+        main: canvasMain,
+        overlay_tl: canvasOverlayTL,
+        overlay_tr: canvasOverlayTR,
+        overlay_bl: canvasOverlayBL,
+        overlay_bc: canvasOverlayBC,
+        overlay_br: canvasOverlayBR
     };
 
-    // Set grid column mode (2 for 4-cam layouts, 3 for 6-cam layouts)
+    // Set grid column mode and layout type
     if (multiCamGrid) {
         multiCamGrid.setAttribute('data-columns', layout.columns || 3);
+        if (isImmersive) {
+            multiCamGrid.setAttribute('data-layout-type', 'immersive');
+            multiCamGrid.style.setProperty('--immersive-opacity', layout.overlayOpacity || 0.9);
+        } else {
+            multiCamGrid.removeAttribute('data-layout-type');
+            multiCamGrid.style.removeProperty('--immersive-opacity');
+        }
     }
+    
     // Update tile labels to match the layout (by slot attribute; robust for future layouts)
     try {
         for (const slotDef of layout.slots) {
-            const tile = multiCamGrid.querySelector(`.multi-tile[data-slot="${cssEscape(slotDef.slot)}"]`);
+            // Try both regular tiles and immersive overlays
+            const tile = multiCamGrid.querySelector(`.multi-tile[data-slot="${cssEscape(slotDef.slot)}"]`) 
+                      || multiCamGrid.querySelector(`.immersive-overlay[data-slot="${cssEscape(slotDef.slot)}"]`);
             const labelEl = tile?.querySelector?.('.multi-label');
             if (labelEl && slotDef?.label) labelEl.textContent = slotDef.label;
         }
@@ -688,7 +742,9 @@ async function loadMultiCamGroup(group, opts = {}) {
     if (!hasMaster) {
         const entry = group.filesByCamera.get(multi.masterCamera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
         if (entry?.file) {
-            const temp = buildStream(multi.masterCamera, canvasTL);
+            // Use appropriate canvas for fallback (main for immersive, tl for standard)
+            const fallbackCanvas = isImmersive ? canvasMain : canvasTL;
+            const temp = buildStream(multi.masterCamera, fallbackCanvas);
             temp.file = entry.file;
             temp.buffer = await entry.file.arrayBuffer();
             const mp4Obj = new DashcamMP4(temp.buffer);
