@@ -111,43 +111,125 @@
                     <div class="drag-handle">:::</div>
                 </div>
                 <div class="vis-content">
-                    <div class="turn-signal left" id="blinkLeft">
-                        <svg viewBox="0 0 24 24"><path d="M14 7l-5 5 5 5V7z" fill="currentColor"/></svg>
+                    <!-- Left: Steering wheel -->
+                    <div class="steering-section">
+                        <div class="steering-wheel" id="steeringIcon">
+                            <!-- Tesla Yoke-style steering wheel -->
+                            <svg viewBox="0 0 100 100" fill="none">
+                                <!-- Outer ring (top arc only for yoke) -->
+                                <path d="M15 50 A35 35 0 0 1 85 50" stroke="currentColor" stroke-width="8" stroke-linecap="round" fill="none"/>
+                                <!-- Left horn -->
+                                <path d="M15 50 L22 65 Q25 70 30 68 L38 62" stroke="currentColor" stroke-width="6" stroke-linecap="round" fill="none"/>
+                                <!-- Right horn -->
+                                <path d="M85 50 L78 65 Q75 70 70 68 L62 62" stroke="currentColor" stroke-width="6" stroke-linecap="round" fill="none"/>
+                                <!-- Center hub -->
+                                <circle cx="50" cy="55" r="12" stroke="currentColor" stroke-width="3" fill="none"/>
+                                <!-- Tesla T logo in center -->
+                                <path d="M44 52 L50 52 L50 62 M50 52 L56 52" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                                <!-- Left spoke connection -->
+                                <path d="M38 55 L38 62" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+                                <!-- Right spoke connection -->
+                                <path d="M62 55 L62 62" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <div class="autopilot-badge" id="autopilotStatus">
+                            <span id="apText">Manual</span>
+                        </div>
                     </div>
-                    
+
+                    <!-- Center: Speed & Gear -->
                     <div class="center-cluster">
+                        <div class="speed-display">
+                            <div class="speed-value" id="speedValue">0</div>
+                            <div class="speed-unit">MPH</div>
+                        </div>
                         <div class="gear-indicator">
                             <span id="gearP" class="gear">P</span>
                             <span id="gearR" class="gear">R</span>
                             <span id="gearN" class="gear">N</span>
                             <span id="gearD" class="gear">D</span>
                         </div>
-                        <div class="speed-display">
-                            <div class="speed-value" id="speedValue">0</div>
-                            <div class="speed-unit">MPH</div>
-                        </div>
-                        <div class="autopilot-status" id="autopilotStatus">
-                            <div class="steering-icon" id="steeringIcon">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="10"></circle>
-                                    <path d="M12 2v20M2 12h20"></path>
-                                </svg>
+                    </div>
+
+                    <!-- Right: Turn signals & Pedals -->
+                    <div class="right-cluster">
+                        <div class="turn-signals">
+                            <div class="turn-signal left" id="blinkLeft">
+                                <svg viewBox="0 0 24 24"><path d="M14 7l-5 5 5 5V7z" fill="currentColor"/></svg>
                             </div>
-                            <span id="apText">Manual</span>
+                            <div class="turn-signal right" id="blinkRight">
+                                <svg viewBox="0 0 24 24"><path d="M10 7l5 5-5 5V7z" fill="currentColor"/></svg>
+                            </div>
                         </div>
-                        
                         <div class="pedals-cluster">
                             <div class="brake-indicator" id="brakeInd">
-                                <span class="brake-text">BRAKE</span>
+                                <span class="brake-text">B</span>
                             </div>
                             <div class="accel-meter">
                                 <div class="accel-bar" id="accelBar"></div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="turn-signal right" id="blinkRight">
-                        <svg viewBox="0 0 24 24"><path d="M10 7l5 5-5 5V7z" fill="currentColor"/></svg>
+                <!-- Instruments Row: G-Force & Compass -->
+                <div class="instruments-row">
+                    <!-- G-Force Meter -->
+                    <div class="gforce-section">
+                        <div class="gforce-meter" id="gforceMeter">
+                            <svg viewBox="0 0 60 60">
+                                <!-- Background circles -->
+                                <circle cx="30" cy="30" r="28" fill="rgba(0,0,0,0.3)" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+                                <circle cx="30" cy="30" r="18" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                                <circle cx="30" cy="30" r="9" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                                <!-- Crosshairs -->
+                                <line x1="30" y1="2" x2="30" y2="58" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+                                <line x1="2" y1="30" x2="58" y2="30" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+                                <!-- G-force dot with glow -->
+                                <circle id="gforceDot" cx="30" cy="30" r="4" fill="#3e9cbf">
+                                    <animate attributeName="opacity" values="0.8;1;0.8" dur="1s" repeatCount="indefinite"/>
+                                </circle>
+                                <!-- Trail dots (will be updated via JS) -->
+                                <circle id="gforceTrail1" cx="30" cy="30" r="2.5" fill="rgba(62,156,191,0.4)"/>
+                                <circle id="gforceTrail2" cx="30" cy="30" r="2" fill="rgba(62,156,191,0.2)"/>
+                                <circle id="gforceTrail3" cx="30" cy="30" r="1.5" fill="rgba(62,156,191,0.1)"/>
+                            </svg>
+                            <div class="gforce-label">G</div>
+                        </div>
+                        <div class="gforce-values">
+                            <div class="gforce-val" id="gforceX" title="Lateral G">0.0</div>
+                            <div class="gforce-val" id="gforceY" title="Longitudinal G">0.0</div>
+                        </div>
+                    </div>
+
+                    <!-- Heading Compass -->
+                    <div class="compass-section">
+                        <div class="compass-meter" id="compassMeter">
+                            <svg viewBox="0 0 60 60">
+                                <!-- Outer ring -->
+                                <circle cx="30" cy="30" r="28" fill="rgba(0,0,0,0.3)" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+                                <!-- Cardinal direction marks -->
+                                <text x="30" y="10" text-anchor="middle" fill="rgba(255,255,255,0.6)" font-size="8" font-weight="700">N</text>
+                                <text x="30" y="56" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7">S</text>
+                                <text x="7" y="33" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7">W</text>
+                                <text x="53" y="33" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7">E</text>
+                                <!-- Tick marks -->
+                                <line x1="30" y1="12" x2="30" y2="16" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+                                <line x1="30" y1="44" x2="30" y2="48" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+                                <line x1="12" y1="30" x2="16" y2="30" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+                                <line x1="44" y1="30" x2="48" y2="30" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+                                <!-- Compass needle group (rotates) -->
+                                <g id="compassNeedle" transform="rotate(0 30 30)">
+                                    <!-- North pointer (red) -->
+                                    <polygon points="30,14 26,30 30,28 34,30" fill="#e74c3c"/>
+                                    <!-- South pointer (white) -->
+                                    <polygon points="30,46 26,30 30,32 34,30" fill="rgba(255,255,255,0.4)"/>
+                                    <!-- Center dot -->
+                                    <circle cx="30" cy="30" r="3" fill="#222" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+                                </g>
+                            </svg>
+                        </div>
+                        <div class="compass-value" id="compassValue" title="Heading">0°</div>
                     </div>
                 </div>
 
@@ -161,10 +243,6 @@
                     <div id="extraData" class="extra-data">
                         <div class="data-grid">
                             <div class="data-item">
-                                <span class="label">Seq</span>
-                                <span id="valSeq" class="val">--</span>
-                            </div>
-                            <div class="data-item">
                                 <span class="label">Lat</span>
                                 <span id="valLat" class="val">--</span>
                             </div>
@@ -176,18 +254,10 @@
                                 <span class="label">Head</span>
                                 <span id="valHeading" class="val">--</span>
                             </div>
-                            <div class="data-item">
-                                <span class="label">Acc X</span>
-                                <span id="valAccX" class="val">--</span>
-                            </div>
-                            <div class="data-item">
-                                <span class="label">Acc Y</span>
-                                <span id="valAccY" class="val">--</span>
-                            </div>
-                            <div class="data-item">
-                                <span class="label">Acc Z</span>
-                                <span id="valAccZ" class="val">--</span>
-                            </div>
+                        </div>
+                        <div class="seq-display">
+                            <span class="label">Seq</span>
+                            <span id="valSeq" class="val">--</span>
                         </div>
                     </div>
                 </div>
@@ -211,19 +281,30 @@
                 <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
                 <span class="toggle-label">Multi</span>
             </label>
+            <label class="toggle" title="Show speed, gear, steering and other telemetry">
+                <input type="checkbox" id="dashboardToggle" checked>
+                <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                <span class="toggle-label">Dashboard</span>
+            </label>
+            <label class="toggle" title="Show GPS route map">
+                <input type="checkbox" id="mapToggle" checked>
+                <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+                <span class="toggle-label">Map</span>
+            </label>
             <select id="multiLayoutSelect" class="camera-select" title="Multi-camera layout" aria-label="Multi-camera layout">
-                <option value="six_spatial">6-cam Spatial</option>
-                <option value="six_fb_first">6-cam F/B First</option>
+                <option value="six_default">Pillars Top</option>
+                <option value="six_repeaters_top">Repeaters Top</option>
+                <option value="six_fb_first">F/B First</option>
                 <option value="fb_lr">4-cam F/B/L/R</option>
                 <option value="fb_rl">4-cam F/B/R/L</option>
             </select>
             <div class="layout-quick" aria-label="Layout quick switch">
-                <button id="layoutBtnSpatial" class="icon-btn icon-btn--sm" type="button" aria-label="6-cam Spatial Layout" title="6-cam Spatial (Front center top)">
+                <button id="layoutBtnDefault" class="icon-btn icon-btn--sm" type="button" aria-label="Pillars Top Layout" title="Pillars Top / Repeaters Bottom">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M2 4h6v7H2V4zm7 0h6v7H9V4zm7 0h6v7h-6V4zM2 13h6v7H2v-7zm7 0h6v7H9v-7zm7 0h6v7h-6v-7z"></path>
                     </svg>
                 </button>
-                <button id="layoutBtnFbFirst" class="icon-btn icon-btn--sm" type="button" aria-label="6-cam Front/Back First Layout" title="6-cam F/B First">
+                <button id="layoutBtnRepeatersTop" class="icon-btn icon-btn--sm" type="button" aria-label="Repeaters Top Layout" title="Repeaters Top / Pillars Bottom">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M2 4h6v7H2V4zm7 0h6v7H9V4zm7 0h6v7h-6V4zM2 13h6v7H2v-7zm7 0h6v7H9v-7zm7 0h6v7h-6v-7z"></path>
                         <circle cx="5" cy="7.5" r="1.5" fill="currentColor"></circle>

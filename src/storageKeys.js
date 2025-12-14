@@ -7,4 +7,7 @@ export const CLIPS_PREV_MODE_KEY = 'teslareplay.ui.clipsPrevMode';
 export const MULTI_LAYOUT_KEY = 'teslareplay.ui.multiLayout';
 export const MULTI_ENABLED_KEY = 'teslareplay.ui.multiEnabled';
 
+export const DASHBOARD_ENABLED_KEY = 'teslareplay.ui.dashboardEnabled';
+export const MAP_ENABLED_KEY = 'teslareplay.ui.mapEnabled';
+
 

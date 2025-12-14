@@ -52,7 +52,7 @@ export function createInitialState() {
     // Multi-camera playback state
     multi: {
       enabled: false,
-      layoutId: 'six_spatial',
+      layoutId: 'six_default',
       masterCamera: 'front',
       masterTimeIndex: 0,
       // Slot -> stream object (contains per-stream VideoDecoder etc.)
@@ -69,7 +69,7 @@ export function createInitialState() {
     },
 
     ui: {
-      // Multi-cam tile focus (null or 'tl'|'tr'|'bl'|'br')
+      // Multi-cam tile focus (null or 'tl'|'tc'|'tr'|'bl'|'bc'|'br')
       multiFocusSlot: null,
 
       // Event popout row currently open (null or row id string)
@@ -77,7 +77,11 @@ export function createInitialState() {
 
       // Scrubbing flags/timers
       isScrubbing: false,
-      collectionScrubPreviewTimer: null
+      collectionScrubPreviewTimer: null,
+
+      // Floating panel visibility toggles
+      dashboardEnabled: true,
+      mapEnabled: true
     },
 
     collection: {

@@ -594,11 +594,12 @@ canvas {
 }
 
 .dashboard-vis.visible, .map-vis.visible { display: block; }
+.dashboard-vis.user-hidden, .map-vis.user-hidden { display: none !important; }
 
 .dashboard-vis {
     top: 20px;
     right: 20px;
-    width: 280px;
+    width: 240px;
 }
 
 .map-vis {
@@ -634,10 +635,11 @@ canvas {
 }
 
 .vis-content {
-    padding: 15px;
+    padding: 10px 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
 }
 
 /* Extra Data (Collapsible) */
@@ -676,14 +678,14 @@ canvas {
 }
 
 .extra-data-container.expanded .extra-data {
-    height: 100px; /* Adjust based on content */
+    height: 70px; /* Compact height */
 }
 
 .data-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
-    gap: 8px;
-    padding: 10px 15px 15px 15px;
+    gap: 4px 8px;
+    padding: 6px 10px;
 }
 
 .data-item {
@@ -693,27 +695,188 @@ canvas {
 }
 
 .data-item .label {
-    font-size: 9px;
-    color: #888;
+    font-size: 8px;
+    color: #666;
     text-transform: uppercase;
+    letter-spacing: 0.3px;
 }
 
 .data-item .val {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
-    font-family: monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
     color: var(--accent-color);
 }
 
-
-/* Turn Signals */
-.turn-signal {
-    width: 30px;
-    height: 30px;
-    color: #333;
-    transition: color 0.1s;
+.seq-display {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    padding: 2px 10px 6px;
+    font-size: 8px;
 }
-.turn-signal.active { color: #0f0; filter: drop-shadow(0 0 5px #0f0); }
+
+.seq-display .label {
+    color: #666;
+    text-transform: uppercase;
+}
+
+.seq-display .val {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    color: #888;
+}
+
+/* G-Force Meter */
+.instruments-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.gforce-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.gforce-meter {
+    position: relative;
+    width: 50px;
+    height: 50px;
+}
+
+.gforce-meter svg {
+    width: 100%;
+    height: 100%;
+}
+
+.gforce-label {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    font-size: 7px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.3);
+    text-transform: uppercase;
+}
+
+.gforce-values {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.gforce-val {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    color: #666;
+    min-width: 36px;
+    text-align: right;
+    transition: color 0.15s;
+}
+
+.gforce-val.positive {
+    color: #4caf50;
+}
+
+.gforce-val.negative {
+    color: #ff9800;
+}
+
+.gforce-val.high {
+    color: #f44336;
+}
+
+/* G-force dot color states */
+#gforceDot.braking {
+    fill: #f44336;
+}
+
+#gforceDot.accelerating {
+    fill: #4caf50;
+}
+
+#gforceDot.cornering-hard {
+    fill: #ff9800;
+}
+
+/* Compass Section */
+.compass-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.compass-meter {
+    position: relative;
+    width: 50px;
+    height: 50px;
+}
+
+.compass-meter svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* Compass needle rotation is handled via SVG transform attribute */
+
+.compass-value {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+    color: #888;
+    text-align: center;
+}
+
+
+/* Steering Section */
+.steering-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.steering-wheel {
+    width: 52px;
+    height: 52px;
+    color: #666;
+    transition: transform 0.1s linear, color 0.2s;
+}
+
+.steering-wheel svg {
+    width: 100%;
+    height: 100%;
+}
+
+.autopilot-badge {
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #666;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.autopilot-badge.active-ap {
+    background: rgba(62, 156, 191, 0.2);
+    border-color: rgba(62, 156, 191, 0.4);
+    color: #3e9cbf;
+}
+
+.autopilot-badge.active-fsd {
+    background: rgba(138, 43, 226, 0.2);
+    border-color: rgba(138, 43, 226, 0.4);
+    color: #9b59b6;
+}
 
 /* Center Cluster */
 .center-cluster {
@@ -721,108 +884,116 @@ canvas {
     flex-direction: column;
     align-items: center;
     flex: 1;
+    min-width: 0;
 }
-
-/* Gear */
-.gear-indicator {
-    font-size: 12px;
-    color: #666;
-    margin-bottom: 5px;
-    display: flex;
-    gap: 8px;
-}
-.gear { font-weight: bold; }
-.gear.active { color: var(--text-color); }
 
 /* Speed */
 .speed-display {
     text-align: center;
-    margin-bottom: 5px;
-}
-.speed-value {
-    font-size: 48px;
-    font-weight: 300;
     line-height: 1;
 }
-.speed-unit {
-    font-size: 10px;
-    font-weight: 600;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+
+.speed-value {
+    font-size: 36px;
+    font-weight: 300;
+    line-height: 1;
+    color: #fff;
 }
 
-/* Autopilot / Steering */
-.autopilot-status {
+.speed-unit {
+    font-size: 9px;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 1px;
+}
+
+/* Gear */
+.gear-indicator {
+    font-size: 10px;
+    color: #444;
+    margin-top: 4px;
+    display: flex;
+    gap: 5px;
+}
+
+.gear {
+    font-weight: 700;
+    transition: color 0.1s;
+}
+
+.gear.active {
+    color: var(--text-color);
+}
+
+/* Right Cluster */
+.right-cluster {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    color: #888;
+    align-items: flex-end;
+    gap: 6px;
 }
-.steering-icon {
-    width: 24px;
-    height: 24px;
-    transition: transform 0.1s linear, color 0.3s;
-}
-.autopilot-status.active-ap { color: #3e9cbf; } /* Autosteer Blue */
-.autopilot-status.active-fsd { color: #ff0000; } /* Actually typically rainbow or blue in newer UI, stick to concept */
 
-#apText { font-size: 10px; font-weight: 600; text-transform: uppercase; }
+/* Turn Signals */
+.turn-signals {
+    display: flex;
+    gap: 2px;
+}
+
+.turn-signal {
+    width: 20px;
+    height: 20px;
+    color: #333;
+    transition: color 0.1s;
+}
+
+.turn-signal.active {
+    color: #0f0;
+    filter: drop-shadow(0 0 4px #0f0);
+}
 
 /* Pedals */
 .pedals-cluster {
-    margin-top: 10px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 0 10px;
+    gap: 4px;
+    width: 60px;
 }
 
 .brake-indicator {
-    width: 50px;
+    width: 18px;
     height: 18px;
-    background: #333;
+    background: #222;
     border-radius: 4px;
     display: flex;
     justify-content: center;
     align-items: center;
-    opacity: 0.5;
+    border: 1px solid #444;
     transition: all 0.1s;
 }
 
 .brake-indicator.active {
-    background: #ff0000;
-    opacity: 1;
-    box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+    background: #e53935;
+    border-color: #e53935;
+    box-shadow: 0 0 8px rgba(229, 57, 53, 0.5);
 }
 
 .brake-text {
-    font-size: 9px;
-    font-weight: bold;
-    color: #000; /* Dark text on dark bg (inactive) or red bg (active) - tweak below */
-    display: none;
-}
-.brake-indicator.active .brake-text {
-    display: block;
-    color: white;
-}
-/* When inactive show 'B' or just darken */
-.brake-indicator:not(.active) {
-    background: #222;
-    border: 1px solid #444;
-}
-.brake-indicator:not(.active) .brake-text {
-    display: block;
+    font-size: 8px;
+    font-weight: 700;
     color: #444;
+}
+
+.brake-indicator.active .brake-text {
+    color: #fff;
 }
 
 .accel-meter {
     flex: 1;
-    height: 8px;
+    height: 6px;
     background: #222;
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
     border: 1px solid #444;
 }
@@ -830,7 +1001,8 @@ canvas {
 .accel-bar {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #666, #fff);
+    background: linear-gradient(90deg, #4a4a4a, #00c853);
+    border-radius: 2px;
     transition: width 0.1s linear;
 }
 

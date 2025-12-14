@@ -1,5 +1,5 @@
 import { MULTI_LAYOUTS, DEFAULT_MULTI_LAYOUT } from './src/multiLayouts.js';
-import { CLIPS_MODE_KEY, CLIPS_PREV_MODE_KEY, MULTI_LAYOUT_KEY, MULTI_ENABLED_KEY } from './src/storageKeys.js';
+import { CLIPS_MODE_KEY, CLIPS_PREV_MODE_KEY, MULTI_LAYOUT_KEY, MULTI_ENABLED_KEY, DASHBOARD_ENABLED_KEY, MAP_ENABLED_KEY } from './src/storageKeys.js';
 import { createClipsPanelMode } from './src/panelMode.js';
 import { escapeHtml, cssEscape } from './src/utils.js';
 import { state } from './src/state.js';
@@ -49,9 +49,11 @@ const clipsCollapseBtn = $('clipsCollapseBtn');
 const cameraSelect = $('cameraSelect');
 const autoplayToggle = $('autoplayToggle');
 const multiCamToggle = $('multiCamToggle');
+const dashboardToggle = $('dashboardToggle');
+const mapToggle = $('mapToggle');
 const multiLayoutSelect = $('multiLayoutSelect');
-const layoutBtnSpatial = $('layoutBtnSpatial');
-const layoutBtnFbFirst = $('layoutBtnFbFirst');
+const layoutBtnDefault = $('layoutBtnDefault');
+const layoutBtnRepeatersTop = $('layoutBtnRepeatersTop');
 const multiCamGrid = $('multiCamGrid');
 // Canvas elements for 6-camera grid (slots: tl, tc, tr, bl, bc, br)
 const canvasTL = $('canvasTL');
@@ -92,6 +94,22 @@ const valAccX = $('valAccX');
 const valAccY = $('valAccY');
 const valAccZ = $('valAccZ');
 const valSeq = $('valSeq');
+
+// G-Force Meter Elements
+const gforceDot = $('gforceDot');
+const gforceTrail1 = $('gforceTrail1');
+const gforceTrail2 = $('gforceTrail2');
+const gforceTrail3 = $('gforceTrail3');
+const gforceX = $('gforceX');
+const gforceY = $('gforceY');
+
+// Compass Elements
+const compassNeedle = $('compassNeedle');
+const compassValue = $('compassValue');
+
+// G-Force trail history (stores last few positions)
+const gforceHistory = [];
+const GFORCE_HISTORY_MAX = 3;
 
 // Constants
 const MPS_TO_MPH = 2.23694;
@@ -155,6 +173,33 @@ const MPS_TO_MPH = 2.23694;
         reloadSelectedGroup();
     };
 
+    // Dashboard (SEI overlay) toggle
+    dashboardToggle.onchange = () => {
+        state.ui.dashboardEnabled = !!dashboardToggle.checked;
+        localStorage.setItem(DASHBOARD_ENABLED_KEY, state.ui.dashboardEnabled ? '1' : '0');
+        updateDashboardVisibility();
+    };
+
+    // Map toggle
+    mapToggle.onchange = () => {
+        state.ui.mapEnabled = !!mapToggle.checked;
+        localStorage.setItem(MAP_ENABLED_KEY, state.ui.mapEnabled ? '1' : '0');
+        updateMapVisibility();
+    };
+
+    // Initialize dashboard/map toggles from localStorage (default ON)
+    const savedDashboard = localStorage.getItem(DASHBOARD_ENABLED_KEY);
+    state.ui.dashboardEnabled = savedDashboard == null ? true : savedDashboard === '1';
+    if (dashboardToggle) dashboardToggle.checked = state.ui.dashboardEnabled;
+
+    const savedMap = localStorage.getItem(MAP_ENABLED_KEY);
+    state.ui.mapEnabled = savedMap == null ? true : savedMap === '1';
+    if (mapToggle) mapToggle.checked = state.ui.mapEnabled;
+
+    // Apply initial visibility state
+    updateDashboardVisibility();
+    updateMapVisibility();
+
     // Multi-cam layout preset
     multi.layoutId = localStorage.getItem(MULTI_LAYOUT_KEY) || DEFAULT_MULTI_LAYOUT;
     if (multiLayoutSelect) {
@@ -165,8 +210,8 @@ const MPS_TO_MPH = 2.23694;
     }
 
     // Layout quick switch buttons
-    if (layoutBtnSpatial) layoutBtnSpatial.onclick = (e) => { e.preventDefault(); setMultiLayout('six_spatial'); };
-    if (layoutBtnFbFirst) layoutBtnFbFirst.onclick = (e) => { e.preventDefault(); setMultiLayout('six_fb_first'); };
+    if (layoutBtnDefault) layoutBtnDefault.onclick = (e) => { e.preventDefault(); setMultiLayout('six_default'); };
+    if (layoutBtnRepeatersTop) layoutBtnRepeatersTop.onclick = (e) => { e.preventDefault(); setMultiLayout('six_repeaters_top'); };
     updateMultiLayoutButtons();
 
     // Multi focus mode (click a tile)
@@ -229,8 +274,8 @@ function setMultiLayout(layoutId) {
 }
 
 function updateMultiLayoutButtons() {
-    if (layoutBtnSpatial) layoutBtnSpatial.classList.toggle('active', multi.layoutId === 'six_spatial');
-    if (layoutBtnFbFirst) layoutBtnFbFirst.classList.toggle('active', multi.layoutId === 'six_fb_first');
+    if (layoutBtnDefault) layoutBtnDefault.classList.toggle('active', multi.layoutId === 'six_default');
+    if (layoutBtnRepeatersTop) layoutBtnRepeatersTop.classList.toggle('active', multi.layoutId === 'six_repeaters_top');
 }
 
 function clearMultiFocus() {
@@ -249,6 +294,20 @@ function toggleMultiFocus(slot) {
     state.ui.multiFocusSlot = slot;
     multiCamGrid.classList.add('focused');
     multiCamGrid.setAttribute('data-focus-slot', slot);
+}
+
+// Dashboard (SEI overlay) visibility
+function updateDashboardVisibility() {
+    if (!dashboardVis) return;
+    // Toggle controls whether it can be shown; 'visible' class is added when there's data
+    dashboardVis.classList.toggle('user-hidden', !state.ui.dashboardEnabled);
+}
+
+// Map visibility  
+function updateMapVisibility() {
+    if (!mapVis) return;
+    // Toggle controls whether it can be shown; 'visible' class is added when there's GPS data
+    mapVis.classList.toggle('user-hidden', !state.ui.mapEnabled);
 }
 
 // Clips panel mode logic moved to src/panelMode.js
@@ -1675,7 +1734,21 @@ progressBar.addEventListener('pointercancel', () => { state.ui.isScrubbing = fal
 // Keyboard controls
 document.addEventListener('keydown', (e) => {
     if (!player.frames && !state.collection.active) return;
+
+    // Ignore keyboard shortcuts when an interactive element is focused
+    // (buttons, inputs, selects) to avoid double-triggering
+    const activeEl = document.activeElement;
+    const isInteractive = activeEl && (
+        activeEl.tagName === 'BUTTON' ||
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'SELECT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.isContentEditable
+    );
+
     if (e.code === 'Space') {
+        // If a button/input is focused, let the browser handle it normally
+        if (isInteractive) return;
         e.preventDefault();
         player.playing ? pause() : play();
     } else if (e.code === 'Escape') {
@@ -2013,6 +2086,107 @@ function createChunk(frame) {
     });
 }
 
+// G-Force Meter Logic
+const GRAVITY = 9.81; // m/s² per G
+const GFORCE_SCALE = 25; // pixels per G (radius of meter is ~28px, so 1G reaches near edge)
+
+function updateGForceMeter(sei) {
+    if (!gforceDot) return;
+
+    // Get acceleration values (in m/s²)
+    const accX = sei?.linear_acceleration_mps2_x || 0;
+    const accY = sei?.linear_acceleration_mps2_y || 0;
+
+    // Convert to G-force
+    const gX = accX / GRAVITY;
+    const gY = accY / GRAVITY;
+
+    // Clamp to reasonable range (-2G to +2G for display)
+    const clampedGX = Math.max(-2, Math.min(2, gX));
+    const clampedGY = Math.max(-2, Math.min(2, gY));
+
+    // Calculate dot position (center is 30,30 in the SVG viewBox)
+    // X: positive = right (cornering left causes rightward force)
+    // Y: positive = down (braking causes forward force, shown as down)
+    const dotX = 30 + (clampedGX * GFORCE_SCALE);
+    const dotY = 30 - (clampedGY * GFORCE_SCALE); // Invert Y so acceleration shows up
+
+    // Update trail history
+    gforceHistory.unshift({ x: dotX, y: dotY });
+    if (gforceHistory.length > GFORCE_HISTORY_MAX) {
+        gforceHistory.pop();
+    }
+
+    // Update dot position
+    gforceDot.setAttribute('cx', dotX);
+    gforceDot.setAttribute('cy', dotY);
+
+    // Update trail dots
+    if (gforceTrail1 && gforceHistory.length > 0) {
+        gforceTrail1.setAttribute('cx', gforceHistory[0]?.x || 30);
+        gforceTrail1.setAttribute('cy', gforceHistory[0]?.y || 30);
+    }
+    if (gforceTrail2 && gforceHistory.length > 1) {
+        gforceTrail2.setAttribute('cx', gforceHistory[1]?.x || 30);
+        gforceTrail2.setAttribute('cy', gforceHistory[1]?.y || 30);
+    }
+    if (gforceTrail3 && gforceHistory.length > 2) {
+        gforceTrail3.setAttribute('cx', gforceHistory[2]?.x || 30);
+        gforceTrail3.setAttribute('cy', gforceHistory[2]?.y || 30);
+    }
+
+    // Color the dot based on force type
+    const totalG = Math.sqrt(gX * gX + gY * gY);
+    gforceDot.classList.remove('braking', 'accelerating', 'cornering-hard');
+    if (gY < -0.3) {
+        gforceDot.classList.add('braking');
+    } else if (gY > 0.3) {
+        gforceDot.classList.add('accelerating');
+    } else if (Math.abs(gX) > 0.5) {
+        gforceDot.classList.add('cornering-hard');
+    }
+
+    // Update numeric displays
+    if (gforceX) {
+        gforceX.textContent = (gX >= 0 ? '+' : '') + gX.toFixed(1);
+        gforceX.classList.remove('positive', 'negative', 'high');
+        if (Math.abs(gX) > 0.8) gforceX.classList.add('high');
+        else if (gX > 0.2) gforceX.classList.add('positive');
+        else if (gX < -0.2) gforceX.classList.add('negative');
+    }
+    if (gforceY) {
+        gforceY.textContent = (gY >= 0 ? '+' : '') + gY.toFixed(1);
+        gforceY.classList.remove('positive', 'negative', 'high');
+        if (Math.abs(gY) > 0.8) gforceY.classList.add('high');
+        else if (gY > 0.2) gforceY.classList.add('positive');
+        else if (gY < -0.2) gforceY.classList.add('negative');
+    }
+}
+
+// Compass update
+function updateCompass(sei) {
+    if (!compassNeedle) return;
+
+    // Get heading, ensure it's a valid number
+    let heading = parseFloat(sei?.heading_deg);
+    if (!Number.isFinite(heading)) heading = 0;
+    
+    // Normalize to 0-360 range
+    heading = ((heading % 360) + 360) % 360;
+    
+    // Rotate the needle - heading 0° = North (pointing up)
+    compassNeedle.setAttribute('transform', `rotate(${heading} 30 30)`);
+    
+    // Update numeric display
+    if (compassValue) {
+        // Format heading with cardinal direction
+        const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+        const index = Math.round(heading / 45) % 8;
+        const cardinal = cardinals[index] || 'N';
+        compassValue.textContent = `${Math.round(heading)}° ${cardinal}`;
+    }
+}
+
 // Visualization Logic
 function updateVisualization(sei) {
     if (!sei) return;
@@ -2046,12 +2220,12 @@ function updateVisualization(sei) {
     // Autopilot
     // 0=NONE, 1=SELF_DRIVING, 2=AUTOSTEER, 3=TACC
     const apState = sei.autopilot_state;
-    autopilotStatus.className = 'autopilot-status'; // Reset
+    autopilotStatus.className = 'autopilot-badge'; // Reset
     if (apState === 2 || apState === 3) {
         autopilotStatus.classList.add('active-ap');
-        apText.textContent = apState === 3 ? 'TACC' : 'Autosteer';
+        apText.textContent = apState === 3 ? 'TACC' : 'AP';
     } else if (apState === 1) {
-        autopilotStatus.classList.add('active-fsd'); // Or just use same blue/rainbow
+        autopilotStatus.classList.add('active-fsd');
         apText.textContent = 'FSD';
     } else {
         apText.textContent = 'Manual';
@@ -2080,15 +2254,21 @@ function updateVisualization(sei) {
 
     // Extra Data
     if (extraDataContainer.classList.contains('expanded')) {
-        valSeq.textContent = sei.frame_seq_no || '--';
-        valLat.textContent = (sei.latitude_deg || 0).toFixed(6);
-        valLon.textContent = (sei.longitude_deg || 0).toFixed(6);
-        valHeading.textContent = (sei.heading_deg || 0).toFixed(1) + '°';
+        if (valSeq) valSeq.textContent = sei.frame_seq_no || '--';
+        if (valLat) valLat.textContent = (sei.latitude_deg || 0).toFixed(6);
+        if (valLon) valLon.textContent = (sei.longitude_deg || 0).toFixed(6);
+        if (valHeading) valHeading.textContent = (sei.heading_deg || 0).toFixed(1) + '°';
         
-        valAccX.textContent = (sei.linear_acceleration_mps2_x || 0).toFixed(2);
-        valAccY.textContent = (sei.linear_acceleration_mps2_y || 0).toFixed(2);
-        valAccZ.textContent = (sei.linear_acceleration_mps2_z || 0).toFixed(2);
+        if (valAccX) valAccX.textContent = (sei.linear_acceleration_mps2_x || 0).toFixed(2);
+        if (valAccY) valAccY.textContent = (sei.linear_acceleration_mps2_y || 0).toFixed(2);
+        if (valAccZ) valAccZ.textContent = (sei.linear_acceleration_mps2_z || 0).toFixed(2);
     }
+
+    // G-Force Meter Update
+    updateGForceMeter(sei);
+
+    // Compass Update
+    updateCompass(sei);
 
     // Map Update
     if (map && sei.latitude_deg && sei.longitude_deg) {
@@ -2110,14 +2290,33 @@ function updateVisualization(sei) {
     }
 }
 
-// Toggle Extra Data
-toggleExtra.onclick = () => {
+// Toggle Extra Data - prevent all event bubbling to avoid interfering with playback
+toggleExtra.addEventListener('mousedown', (e) => e.stopPropagation());
+toggleExtra.addEventListener('pointerdown', (e) => e.stopPropagation());
+toggleExtra.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     extraDataContainer.classList.toggle('expanded');
     // Refresh data if expanding while paused
     if (extraDataContainer.classList.contains('expanded') && player.frames && progressBar.value) {
          updateVisualization(player.frames[+progressBar.value].sei);
     }
+    // Blur so Space key works for play/pause immediately after
+    toggleExtra.blur();
 };
+
+// Prevent dashboard interactions from bubbling to videoContainer
+dashboardVis.addEventListener('mousedown', (e) => {
+    // Only stop propagation if not on the drag handle
+    if (!e.target.closest('.vis-header')) {
+        e.stopPropagation();
+    }
+});
+dashboardVis.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.vis-header')) {
+        e.stopPropagation();
+    }
+});
 
 function updateTimeDisplay(frameIndex) {
     if (state.collection.active) {
