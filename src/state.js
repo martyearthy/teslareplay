@@ -52,7 +52,7 @@ export function createInitialState() {
     // Multi-camera playback state
     multi: {
       enabled: false,
-      layoutId: 'fb_lr',
+      layoutId: 'six_spatial',
       masterCamera: 'front',
       masterTimeIndex: 0,
       // Slot -> stream object (contains per-stream VideoDecoder etc.)

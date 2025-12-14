@@ -79,11 +79,21 @@ canvas {
     inset: 0;
     padding: 10px;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     grid-template-rows: 1fr 1fr;
     gap: 10px;
     z-index: 5;
 }
+
+/* 2-column (4-cam) layout: hide center column tiles */
+.multi-cam-grid[data-columns="2"] {
+    grid-template-columns: 1fr 1fr;
+}
+.multi-cam-grid[data-columns="2"] .multi-tile[data-slot="tc"],
+.multi-cam-grid[data-columns="2"] .multi-tile[data-slot="bc"] {
+    display: none;
+}
+
 .multi-tile {
     position: relative;
     border-radius: 12px;
@@ -121,8 +131,10 @@ canvas {
     display: none;
 }
 .multi-cam-grid.focused[data-focus-slot="tl"] .multi-tile[data-slot="tl"],
+.multi-cam-grid.focused[data-focus-slot="tc"] .multi-tile[data-slot="tc"],
 .multi-cam-grid.focused[data-focus-slot="tr"] .multi-tile[data-slot="tr"],
 .multi-cam-grid.focused[data-focus-slot="bl"] .multi-tile[data-slot="bl"],
+.multi-cam-grid.focused[data-focus-slot="bc"] .multi-tile[data-slot="bc"],
 .multi-cam-grid.focused[data-focus-slot="br"] .multi-tile[data-slot="br"] {
     display: flex;
     position: absolute;

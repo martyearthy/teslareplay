@@ -29,23 +29,33 @@
             </div>
             <canvas id="videoCanvas"></canvas>
 
-            <!-- Multi-camera grid (Step 6) -->
+            <!-- Multi-camera grid (supports 2×2 and 3×2 layouts) -->
             <div id="multiCamGrid" class="multi-cam-grid hidden" aria-label="Multi-camera view">
+                <!-- Top row -->
                 <div class="multi-tile" data-slot="tl">
                     <div class="multi-label">Front</div>
-                    <canvas id="canvasFront"></canvas>
+                    <canvas id="canvasTL"></canvas>
+                </div>
+                <div class="multi-tile" data-slot="tc">
+                    <div class="multi-label">Center</div>
+                    <canvas id="canvasTC"></canvas>
                 </div>
                 <div class="multi-tile" data-slot="tr">
                     <div class="multi-label">Right</div>
-                    <canvas id="canvasRight"></canvas>
+                    <canvas id="canvasTR"></canvas>
                 </div>
+                <!-- Bottom row -->
                 <div class="multi-tile" data-slot="bl">
                     <div class="multi-label">Left</div>
-                    <canvas id="canvasLeft"></canvas>
+                    <canvas id="canvasBL"></canvas>
+                </div>
+                <div class="multi-tile" data-slot="bc">
+                    <div class="multi-label">Back</div>
+                    <canvas id="canvasBC"></canvas>
                 </div>
                 <div class="multi-tile" data-slot="br">
                     <div class="multi-label">Back</div>
-                    <canvas id="canvasBack"></canvas>
+                    <canvas id="canvasBR"></canvas>
                 </div>
             </div>
 
@@ -202,28 +212,31 @@
                 <span class="toggle-label">Multi</span>
             </label>
             <select id="multiLayoutSelect" class="camera-select" title="Multi-camera layout" aria-label="Multi-camera layout">
-                <option value="fb_lr">F/B/L/R</option>
-                <option value="fb_rl">F/B/R/L</option>
+                <option value="six_spatial">6-cam Spatial</option>
+                <option value="six_fb_first">6-cam F/B First</option>
+                <option value="fb_lr">4-cam F/B/L/R</option>
+                <option value="fb_rl">4-cam F/B/R/L</option>
             </select>
             <div class="layout-quick" aria-label="Layout quick switch">
-                <button id="layoutBtnFbLr" class="icon-btn icon-btn--sm" type="button" aria-label="Layout Front Back Left Right" title="Layout: Front, Back, Left, Right">
+                <button id="layoutBtnSpatial" class="icon-btn icon-btn--sm" type="button" aria-label="6-cam Spatial Layout" title="6-cam Spatial (Front center top)">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 6h7v7H4V6zm9 0h7v7h-7V6zM4 15h7v3H4v-3zm9 0h7v3h-7v-3z"></path>
-                        <path d="M7.5 19.5h9v1h-9v-1z"></path>
+                        <path d="M2 4h6v7H2V4zm7 0h6v7H9V4zm7 0h6v7h-6V4zM2 13h6v7H2v-7zm7 0h6v7H9v-7zm7 0h6v7h-6v-7z"></path>
                     </svg>
                 </button>
-                <button id="layoutBtnFbRl" class="icon-btn icon-btn--sm" type="button" aria-label="Layout Front Back Right Left" title="Layout: Front, Back, Right, Left">
+                <button id="layoutBtnFbFirst" class="icon-btn icon-btn--sm" type="button" aria-label="6-cam Front/Back First Layout" title="6-cam F/B First">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 6h7v7H4V6zm9 0h7v7h-7V6zM4 15h7v3H4v-3zm9 0h7v3h-7v-3z"></path>
-                        <path d="M8 20l-2-2 2-2 1.4 1.4-0.6 0.6H15l-0.6-0.6L15.8 16 18 18.2 15.8 20.4 14.4 19l0.6-0.6H8.8l0.6 0.6L8 20z"></path>
+                        <path d="M2 4h6v7H2V4zm7 0h6v7H9V4zm7 0h6v7h-6V4zM2 13h6v7H2v-7zm7 0h6v7H9v-7zm7 0h6v7h-6v-7z"></path>
+                        <circle cx="5" cy="7.5" r="1.5" fill="currentColor"></circle>
                     </svg>
                 </button>
             </div>
             <select id="cameraSelect" class="camera-select" disabled title="Camera">
                 <option value="front">Front</option>
                 <option value="back">Back</option>
-                <option value="left_repeater">Left</option>
-                <option value="right_repeater">Right</option>
+                <option value="left_repeater">Left Rep</option>
+                <option value="right_repeater">Right Rep</option>
+                <option value="left_pillar">Left Pillar</option>
+                <option value="right_pillar">Right Pillar</option>
             </select>
             <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0" disabled>
             <div class="time-display" id="timeDisplay">00:00</div>

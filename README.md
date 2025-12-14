@@ -21,9 +21,10 @@ Original code from Tesla: https://github.com/teslamotors/dashcam
 - **Clip Browser + Previews**:
   - Sidebar clip list with **lazy** thumbnail generation and a **mini route preview** (from SEI GPS) when available.
   - Designed to scale to large folders without eagerly loading every MP4 into memory at once.
-- **Multi‑Camera Playback (2×2 grid)**:
-  - Plays up to 4 cameras in sync (Front/Back/Left/Right) using WebCodecs decoding per camera.
-  - Layout presets + per-tile focus mode for quick inspection.
+- **Multi‑Camera Playback (6-camera 3×2 grid)**:
+  - Plays up to 6 cameras in sync (Front/Back/Left Repeater/Right Repeater/Left Pillar/Right Pillar) using WebCodecs decoding per camera.
+  - Layout presets (spatial arrangement or front/back prioritized) + per-tile focus mode for quick inspection.
+  - Legacy 4-camera layouts (2×2 grid) also available for older recordings.
 - **Telemetry Visualization**:
   - **Speed**: Current vehicle speed in MPH.
   - **Gear Indicator**: Park, Reverse, Neutral, Drive.
@@ -69,15 +70,18 @@ The easiest workflow is to give Tesla Replay the **entire `TeslaCam/` folder** f
    - Use **Play/Pause** or `Spacebar` to toggle playback.
    - Use the scrubber or `Left/Right Arrow` keys to jump through frames.
 
-### Multi‑Camera Playback (2×2)
+### Multi‑Camera Playback (3×2 / 2×2)
 Tesla Replay includes a synced **multi-camera** mode which is ideal for reviewing a moment across all angles.
 
 - **Enable/disable**: Use the **Multi** toggle in the control bar (default ON).
-- **What you see**: A 2×2 grid that shows up to 4 camera feeds simultaneously.
-- **Layout presets**:
-  - **F/B/L/R** = Front, Back, Left Repeater, Right Repeater
-  - **F/B/R/L** = Front, Back, Right Repeater, Left Repeater
-  - Use the dropdown and the two quick-switch icon buttons next to it to swap instantly.
+- **What you see**: A 3×2 grid that shows up to 6 camera feeds simultaneously (or 2×2 for legacy 4-camera recordings).
+- **6-camera layout presets** (default for newer firmware):
+  - **6-cam Spatial** = Left Repeater, Front, Right Repeater (top row) / Left Pillar, Back, Right Pillar (bottom row)
+  - **6-cam F/B First** = Front, Back, Left Repeater (top row) / Right Repeater, Left Pillar, Right Pillar (bottom row)
+- **4-camera layout presets** (for older recordings without pillar cameras):
+  - **4-cam F/B/L/R** = Front, Back, Left Repeater, Right Repeater
+  - **4-cam F/B/R/L** = Front, Back, Right Repeater, Left Repeater
+- Use the dropdown and the two quick-switch icon buttons to swap layouts instantly.
 - **Master camera**:
   - In Multi mode, the **Camera dropdown selects the “master camera”**.
   - The master camera drives:
@@ -86,7 +90,7 @@ Tesla Replay includes a synced **multi-camera** mode which is ideal for reviewin
     - the map route and current position marker
 - **Focus mode per tile**:
   - Click any tile to **enlarge** it.
-  - Click again or press **Esc** to return to the 2×2 grid.
+  - Click again or press **Esc** to return to the grid view.
 
 ### Sentry Collections (One Item per Event Folder)
 Tesla stores Sentry mode footage as a folder per event, with multiple clips before and after the “trigger moment”.
@@ -122,6 +126,8 @@ Within each folder, Tesla typically writes per-camera files named like:
 - `YYYY-MM-DD_HH-MM-SS-back.mp4`
 - `YYYY-MM-DD_HH-MM-SS-left_repeater.mp4`
 - `YYYY-MM-DD_HH-MM-SS-right_repeater.mp4`
+- `YYYY-MM-DD_HH-MM-SS-left_pillar.mp4` (newer vehicles)
+- `YYYY-MM-DD_HH-MM-SS-right_pillar.mp4` (newer vehicles)
 
 Tesla Replay groups these into a single **clip group** by the shared timestamp (`YYYY-MM-DD_HH-MM-SS`) plus the parent folder tag (and Sentry “event folder” when present).
 
@@ -305,7 +311,7 @@ TeslaCam folders contain many MP4s that are logically one “moment” in time a
   - `timestampKey` from filename: `YYYY-MM-DD_HH-MM-SS`
 
 - **Cameras** are identified from the filename suffix:
-  - `front`, `back`, `left_repeater`, `right_repeater` (unknown suffixes are preserved as-is)
+  - `front`, `back`, `left_repeater`, `right_repeater`, `left_pillar`, `right_pillar` (unknown suffixes are preserved as-is)
 
 In `script.js`, each clip group is stored with:
 - `filesByCamera: Map<camera, ClipFile>`
@@ -506,9 +512,10 @@ If you host this publicly (GitHub Pages, etc.), these quick polish items improve
 ### Design Notes for Future Work (Multi-Camera + Export)
 This repo is now structured so future features plug in cleanly:
 
-- **6-camera playback layouts (planned)**
-  - Newer vehicles/firmware may include additional cameras (e.g., left/right pillar feeds).
-  - The multi-cam system is already slot/layout driven; adding a 3×2 grid is mostly UI + layout config work.
+- **6-camera playback layouts (implemented)**
+  - Newer vehicles/firmware include additional cameras (left/right pillar feeds).
+  - The multi-cam system supports both 3×2 (6-camera) and 2×2 (4-camera) grid layouts.
+  - Layout presets are defined in `src/multiLayouts.js` and can be easily extended.
 
 - **Export (planned)**
   - SEI extraction already exists (`DashcamMP4.extractSeiMessages()`).

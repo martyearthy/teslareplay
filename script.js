@@ -50,13 +50,16 @@ const cameraSelect = $('cameraSelect');
 const autoplayToggle = $('autoplayToggle');
 const multiCamToggle = $('multiCamToggle');
 const multiLayoutSelect = $('multiLayoutSelect');
-const layoutBtnFbLr = $('layoutBtnFbLr');
-const layoutBtnFbRl = $('layoutBtnFbRl');
+const layoutBtnSpatial = $('layoutBtnSpatial');
+const layoutBtnFbFirst = $('layoutBtnFbFirst');
 const multiCamGrid = $('multiCamGrid');
-const canvasFront = $('canvasFront');
-const canvasBack = $('canvasBack');
-const canvasLeft = $('canvasLeft');
-const canvasRight = $('canvasRight');
+// Canvas elements for 6-camera grid (slots: tl, tc, tr, bl, bc, br)
+const canvasTL = $('canvasTL');
+const canvasTC = $('canvasTC');
+const canvasTR = $('canvasTR');
+const canvasBL = $('canvasBL');
+const canvasBC = $('canvasBC');
+const canvasBR = $('canvasBR');
 
 // Visualization Elements
 const speedValue = $('speedValue');
@@ -162,8 +165,8 @@ const MPS_TO_MPH = 2.23694;
     }
 
     // Layout quick switch buttons
-    if (layoutBtnFbLr) layoutBtnFbLr.onclick = (e) => { e.preventDefault(); setMultiLayout('fb_lr'); };
-    if (layoutBtnFbRl) layoutBtnFbRl.onclick = (e) => { e.preventDefault(); setMultiLayout('fb_rl'); };
+    if (layoutBtnSpatial) layoutBtnSpatial.onclick = (e) => { e.preventDefault(); setMultiLayout('six_spatial'); };
+    if (layoutBtnFbFirst) layoutBtnFbFirst.onclick = (e) => { e.preventDefault(); setMultiLayout('six_fb_first'); };
     updateMultiLayoutButtons();
 
     // Multi focus mode (click a tile)
@@ -215,12 +218,19 @@ function setMultiLayout(layoutId) {
     localStorage.setItem(MULTI_LAYOUT_KEY, next);
     if (multiLayoutSelect) multiLayoutSelect.value = next;
     updateMultiLayoutButtons();
+
+    // Set grid column mode for the new layout
+    const layout = MULTI_LAYOUTS[next];
+    if (multiCamGrid && layout) {
+        multiCamGrid.setAttribute('data-columns', layout.columns || 3);
+    }
+
     if (multi.enabled) reloadSelectedGroup();
 }
 
 function updateMultiLayoutButtons() {
-    if (layoutBtnFbLr) layoutBtnFbLr.classList.toggle('active', multi.layoutId === 'fb_lr');
-    if (layoutBtnFbRl) layoutBtnFbRl.classList.toggle('active', multi.layoutId === 'fb_rl');
+    if (layoutBtnSpatial) layoutBtnSpatial.classList.toggle('active', multi.layoutId === 'six_spatial');
+    if (layoutBtnFbFirst) layoutBtnFbFirst.classList.toggle('active', multi.layoutId === 'six_fb_first');
 }
 
 function clearMultiFocus() {
@@ -551,14 +561,21 @@ async function loadMultiCamGroup(group, opts = {}) {
     setMultiCamGridVisible(true);
     clearMultiFocus();
 
-    // Build streams for UI slots (TL/TR/BL/BR) using the selected layout.
-    const layout = MULTI_LAYOUTS[multi.layoutId] || MULTI_LAYOUTS.fb_lr;
+    // Build streams for UI slots using the selected layout.
+    const layout = MULTI_LAYOUTS[multi.layoutId] || MULTI_LAYOUTS[DEFAULT_MULTI_LAYOUT];
     const slotCanvases = {
-        tl: canvasFront,
-        tr: canvasRight,
-        bl: canvasLeft,
-        br: canvasBack
+        tl: canvasTL,
+        tc: canvasTC,
+        tr: canvasTR,
+        bl: canvasBL,
+        bc: canvasBC,
+        br: canvasBR
     };
+
+    // Set grid column mode (2 for 4-cam layouts, 3 for 6-cam layouts)
+    if (multiCamGrid) {
+        multiCamGrid.setAttribute('data-columns', layout.columns || 3);
+    }
     // Update tile labels to match the layout (by slot attribute; robust for future layouts)
     try {
         for (const slotDef of layout.slots) {
@@ -612,7 +629,7 @@ async function loadMultiCamGroup(group, opts = {}) {
     if (!hasMaster) {
         const entry = group.filesByCamera.get(multi.masterCamera) || group.filesByCamera.get('front') || group.filesByCamera.values().next().value;
         if (entry?.file) {
-            const temp = buildStream(multi.masterCamera, canvasFront);
+            const temp = buildStream(multi.masterCamera, canvasTL);
             temp.file = entry.file;
             temp.buffer = await entry.file.arrayBuffer();
             const mp4Obj = new DashcamMP4(temp.buffer);
@@ -742,14 +759,18 @@ function normalizeCamera(cameraRaw) {
     if (c === 'back') return 'back';
     if (c === 'left_repeater' || c === 'left') return 'left_repeater';
     if (c === 'right_repeater' || c === 'right') return 'right_repeater';
+    if (c === 'left_pillar') return 'left_pillar';
+    if (c === 'right_pillar') return 'right_pillar';
     return c || 'unknown';
 }
 
 function cameraLabel(camera) {
     if (camera === 'front') return 'Front';
     if (camera === 'back') return 'Back';
-    if (camera === 'left_repeater') return 'Left';
-    if (camera === 'right_repeater') return 'Right';
+    if (camera === 'left_repeater') return 'Left Rep';
+    if (camera === 'right_repeater') return 'Right Rep';
+    if (camera === 'left_pillar') return 'Left Pillar';
+    if (camera === 'right_pillar') return 'Right Pillar';
     return camera;
 }
 
@@ -1224,7 +1245,7 @@ function selectSentryCollection(collectionId) {
 function updateCameraSelect(group) {
     const cams = Array.from(group.filesByCamera.keys());
     cameraSelect.innerHTML = '';
-    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', ...cams];
+    const ordered = ['front', 'back', 'left_repeater', 'right_repeater', 'left_pillar', 'right_pillar', ...cams];
     const seen = new Set();
     for (const cam of ordered) {
         if (seen.has(cam)) continue;
