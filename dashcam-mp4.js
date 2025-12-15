@@ -115,7 +115,8 @@ class DashcamMP4 {
         while (cursor + 4 <= end) {
             const len = this.view.getUint32(cursor);
             cursor += 4;
-            if (len < 1 || cursor + len > this.view.byteLength) break;
+            // Never read past the mdat payload.
+            if (len < 1 || cursor + len > end) break;
 
             const type = this.view.getUint8(cursor) & 0x1F;
             const data = new Uint8Array(this.buffer.slice(cursor, cursor + len));
@@ -158,7 +159,8 @@ class DashcamMP4 {
             const nalSize = this.view.getUint32(cursor);
             cursor += 4;
 
-            if (nalSize < 2 || cursor + nalSize > this.view.byteLength) {
+            // Never read past the mdat payload.
+            if (nalSize < 2 || cursor + nalSize > end) {
                 cursor += Math.max(nalSize, 0);
                 continue;
             }
@@ -236,7 +238,11 @@ window.DashcamMP4 = DashcamMP4;
     async function initProtobuf(protoPath = 'dashcam.proto') {
         if (SeiMetadata) return { SeiMetadata, enumFields };
 
+        if (!window.protobuf) throw new Error('protobuf.js not loaded');
         const response = await fetch(protoPath);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch proto (${response.status} ${response.statusText}): ${protoPath}`);
+        }
         const root = protobuf.parse(await response.text(), { keepCase: true }).root;
         SeiMetadata = root.lookupType('SeiMetadata');
         enumFields = {
@@ -346,8 +352,14 @@ window.DashcamMP4 = DashcamMP4;
                 }
             } else if (entry.isDirectory) {
                 const reader = entry.createReader();
-                const children = await new Promise((res, rej) => reader.readEntries(res, rej));
-                await Promise.all(children.map(traverse));
+                // IMPORTANT: DirectoryReader.readEntries() returns results in batches.
+                // You must keep calling it until it returns an empty array, otherwise
+                // large folders silently drop entries.
+                while (true) {
+                    const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+                    if (!batch?.length) break;
+                    await Promise.all(batch.map(traverse));
+                }
             }
         }
         await Promise.all(entries.map(traverse));

@@ -122,6 +122,48 @@ const GFORCE_HISTORY_MAX = 3;
 // Constants
 const MPS_TO_MPH = 2.23694;
 
+function notify(message, opts = {}) {
+    const type = opts.type || 'info'; // 'info' | 'success' | 'warn' | 'error'
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : (type === 'error' ? 5500 : 3200);
+
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-atomic', 'true');
+        document.body.appendChild(container);
+    }
+
+    const el = document.createElement('div');
+    el.className = `toast toast--${type}`;
+    el.innerHTML = `<span class="dot" aria-hidden="true"></span><div class="msg"></div>`;
+    el.querySelector('.msg').textContent = String(message || '');
+    container.appendChild(el);
+
+    // Animate in
+    requestAnimationFrame(() => el.classList.add('show'));
+
+    // Auto remove
+    const remove = () => {
+        el.classList.remove('show');
+        setTimeout(() => { try { el.remove(); } catch { } }, 180);
+    };
+    setTimeout(remove, timeoutMs);
+}
+
+function hasValidGps(sei) {
+    // Tesla SEI can be missing, zeroed, or invalid while parked / initializing GPS.
+    const lat = Number(sei?.latitude_deg);
+    const lon = Number(sei?.longitude_deg);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    // Treat (0,0) as "no fix" (real-world clips should never be there).
+    if (lat === 0 && lon === 0) return false;
+    // Basic sanity bounds.
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return false;
+    return true;
+}
+
 // Initialize
 (async function init() {
     // Init Map
@@ -141,7 +183,7 @@ const MPS_TO_MPH = 2.23694;
         enumFields = ef;
     } catch (e) {
         console.error('Failed to init protobuf:', e);
-        alert('Failed to initialize metadata parser.');
+        notify('Failed to initialize metadata parser. Make sure protobuf loads and you are not running via file://', { type: 'error' });
     }
 
     // Clip Browser buttons
@@ -460,7 +502,7 @@ dropOverlay.ondrop = e => {
 
 async function handleFile(file) {
     if (!file || !file.name.toLowerCase().endsWith('.mp4')) {
-        alert('Please select a valid MP4 file.');
+        notify('Please select a valid MP4 file.', { type: 'warn' });
         return;
     }
 
@@ -517,7 +559,7 @@ async function handleFile(file) {
             // Extract all coordinates for path
             // This might be heavy for long videos, but standard clips are 1 min ~ 1800-3600 frames. Fine.
             mapPath = player.frames
-                .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
+                .filter(f => hasValidGps(f.sei))
                 .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
 
             if (mapPath.length > 0) {
@@ -545,7 +587,7 @@ async function handleFile(file) {
         }
     } catch (err) {
         console.error(err);
-        alert('Error loading file: ' + err.message);
+        notify('Error loading file: ' + (err?.message || String(err)), { type: 'error' });
         dropOverlay.classList.remove('hidden');
     }
 }
@@ -786,7 +828,7 @@ async function loadMultiCamGroup(group, opts = {}) {
         if (mapMarker) { mapMarker.remove(); mapMarker = null; }
         if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
         mapPath = player.frames
-            .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
+            .filter(f => hasValidGps(f.sei))
             .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
         if (mapPath.length > 0) {
             mapVis.classList.add('visible');
@@ -1059,7 +1101,7 @@ function buildTeslaCamIndex(files, directoryName = null) {
 
 function handleFolderFiles(fileList, directoryName = null) {
     if (!seiType) {
-        alert('Metadata parser not initialized yet—try again in a second.');
+        notify('Metadata parser not initialized yet—try again in a second.', { type: 'warn' });
         return;
     }
 
@@ -1070,7 +1112,7 @@ function handleFolderFiles(fileList, directoryName = null) {
         });
 
     if (!files.length) {
-        alert('No supported files found in that folder.');
+        notify('No supported files found in that folder.', { type: 'warn' });
         return;
     }
 
@@ -1449,7 +1491,7 @@ async function loadSingleGroup(group, camera, opts = {}) {
         if (mapPolyline) { mapPolyline.remove(); mapPolyline = null; }
 
         mapPath = player.frames
-            .filter(f => f.sei && f.sei.latitude_deg && f.sei.longitude_deg)
+            .filter(f => hasValidGps(f.sei))
             .map(f => [f.sei.latitude_deg, f.sei.longitude_deg]);
 
         if (mapPath.length > 0) {
@@ -1474,7 +1516,8 @@ async function loadSingleGroup(group, camera, opts = {}) {
 
 function ensureGroupPreview(groupId, opts = {}) {
     const existing = previews.cache.get(groupId);
-    if (existing?.status === 'ready' || existing?.status === 'loading') return;
+    // Avoid duplicate work when the observer triggers quickly or multiple rows reference the same preview.
+    if (existing?.status === 'ready' || existing?.status === 'loading' || existing?.status === 'queued') return;
     previews.cache.set(groupId, { status: 'queued' });
 
     const task = async () => {
@@ -1495,9 +1538,8 @@ function ensureGroupPreview(groupId, opts = {}) {
             const messages = pmp4.extractSeiMessages(seiType);
             const pts = [];
             for (const m of messages) {
-                const lat = m?.latitude_deg;
-                const lon = m?.longitude_deg;
-                if (typeof lat === 'number' && typeof lon === 'number' && lat !== 0 && lon !== 0) pts.push([lat, lon]);
+                if (!hasValidGps(m)) continue;
+                pts.push([m.latitude_deg, m.longitude_deg]);
             }
             pathPoints = downsamplePoints(pts, 120);
         } catch { /* ignore */ }
@@ -2327,7 +2369,7 @@ function updateVisualization(sei) {
     updateCompass(sei);
 
     // Map Update
-    if (map && sei.latitude_deg && sei.longitude_deg) {
+    if (map && hasValidGps(sei)) {
         const latlng = [sei.latitude_deg, sei.longitude_deg];
         if (!mapMarker) {
             mapMarker = L.circleMarker(latlng, {
