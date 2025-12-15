@@ -121,6 +121,7 @@ const GFORCE_HISTORY_MAX = 3;
 
 // Constants
 const MPS_TO_MPH = 2.23694;
+const NAL_START_CODE = new Uint8Array([0, 0, 0, 1]);
 
 function notify(message, opts = {}) {
     const type = opts.type || 'info'; // 'info' | 'success' | 'warn' | 'error'
@@ -596,6 +597,8 @@ async function loadMp4IntoPlayer(file) {
     const buffer = await file.arrayBuffer();
     player.mp4 = new DashcamMP4(buffer);
     player.frames = player.mp4.parseFrames(seiType);
+    player.lastDecodedFrameIndex = -1;
+    player.seekTargetTimestamp = null;
     return { mp4: player.mp4, frames: player.frames };
 }
 
@@ -652,7 +655,9 @@ function buildStream(camera, canvasEl) {
         decoder: null,
         decoding: false,
         pendingFrame: null,
-        hasSei: false
+        hasSei: false,
+        lastDecodedFrameIndex: -1,
+        seekTargetTimestamp: null
     };
 }
 
@@ -1902,6 +1907,11 @@ function play() {
     }
     player.playing = true;
     updatePlayButton();
+    
+    // Dave Plummer Optimization: Drift-correcting clock
+    // Reset the reference clock to "now". 
+    // We will schedule future frames based on this baseline + cumulative duration.
+    player.nextFrameTime = performance.now();
     playNext();
 }
 
@@ -1909,6 +1919,10 @@ function pause() {
     player.playing = false;
     updatePlayButton();
     if (player.playTimer) { clearTimeout(player.playTimer); player.playTimer = null; }
+    // When pausing, we should flush the pipeline so the last requested frame actually appears
+    if (player.decoder && player.decoder.state === 'configured') {
+        player.decoder.flush().catch(() => {});
+    }
 }
 
 function updatePlayButton() {
@@ -1919,45 +1933,89 @@ function updatePlayButton() {
 
 function playNext() {
     if (!player.playing) return;
+
+    // Sentry Collection Mode Handling
     if (state.collection.active) {
-        // Ensure we never end up with multiple timers running across segment transitions.
         if (player.playTimer) { clearTimeout(player.playTimer); player.playTimer = null; }
+        
+        // If loading a segment, spin-wait briefly (could be optimized further but fine for boundary)
         if (state.collection.active.loading) {
-            player.playTimer = setTimeout(playNext, 50);
+            player.playTimer = setTimeout(playNext, 20); 
+            player.nextFrameTime = performance.now(); // Reset clock while loading
             return;
         }
+
         const currentMs = +progressBar.value;
         const idx = Math.min(Math.max(state.collection.active.currentLocalFrameIdx || 0, 0), (player.frames?.length || 1) - 1);
-        const step = player.frames?.[idx]?.duration || 33;
-        const nextMs = currentMs + step;
+        const frameDur = player.frames?.[idx]?.duration || 33;
+        
+        // Advance time
+        const nextMs = currentMs + frameDur;
         if (nextMs > +progressBar.max) {
             pause();
             return;
         }
+
         progressBar.value = Math.floor(nextMs);
-        // Schedule the next tick only AFTER the segment/frame is ready.
-        // This avoids a race where a segment load clears the timer before it's assigned.
+
+        // Schedule next tick
+        // 1. Calculate ideal time for next frame
+        player.nextFrameTime += frameDur;
+        const now = performance.now();
+        let delay = player.nextFrameTime - now;
+
+        // 2. Drift correction: if we are lagging significantly (>100ms), reset the clock to avoid catch-up fast-forwarding
+        if (delay < -100) {
+            player.nextFrameTime = now;
+            delay = 0;
+        }
+
         showCollectionAtMs(nextMs)
             .then(() => {
                 if (!player.playing) return;
-                // If we're still loading (boundary), poll shortly; otherwise use frame duration.
-                player.playTimer = setTimeout(playNext, state.collection.active?.loading ? 50 : step);
+                // Wait for the calculated delay
+                player.playTimer = setTimeout(playNext, Math.max(0, delay));
             })
             .catch(() => pause());
         return;
     }
 
+    // Standard Clip Mode
     let next = +progressBar.value + 1;
     if (!player.frames || next >= player.frames.length) {
         pause();
         return;
     }
+
+    // Optimization: Check decoder backpressure
+    // If the decoder queue is backing up, skip scheduling a new frame draw this tick to let it drain.
+    // We still advance the clock (drop frame) to maintain sync, OR we just wait.
+    // For smooth playback, we want to feed it. If it's full, we wait.
+    if (player.decoder && player.decoder.decodeQueueSize > 5) {
+        // Backpressure detected. Re-schedule immediately to check again, 
+        // effectively busy-waiting (or small sleep) until queue drains.
+        // Don't advance 'next' yet.
+        player.playTimer = setTimeout(playNext, 5); 
+        return;
+    }
+
     progressBar.value = next;
     showFrame(next);
 
-    // Calculate delay based on master frame duration
-    const duration = player.frames[next].duration || 33;
-    player.playTimer = setTimeout(playNext, duration);
+    const frameDur = player.frames[next].duration || 33;
+    
+    // Drift-correcting scheduling
+    player.nextFrameTime += frameDur;
+    const now = performance.now();
+    let delay = player.nextFrameTime - now;
+
+    // Sync recovery
+    if (delay < -100) {
+        player.nextFrameTime = now;
+        delay = 0;
+    }
+
+    player.playTimer = setTimeout(playNext, Math.max(0, delay));
 }
 
 function showFrame(index) {
@@ -2059,41 +2117,64 @@ function streamShowFrame(stream, index) {
 async function streamDecodeFrame(stream, index) {
     stream.decoding = true;
     try {
-        let keyIdx = index;
-        while (keyIdx >= 0 && !stream.frames[keyIdx].keyframe) keyIdx--;
-        if (keyIdx < 0) return;
+        if (!stream.frames?.[index]) return;
+        const targetFrame = stream.frames[index];
+        const targetTs = targetFrame.timestamp;
 
-        if (stream.decoder) try { stream.decoder.close(); } catch { }
-        const targetCount = index - keyIdx + 1;
-        let count = 0;
-
-        await new Promise((resolve, reject) => {
+        // Init decoder
+        if (!stream.decoder || stream.decoder.state === 'closed') {
             stream.decoder = new VideoDecoder({
-                output: frame => {
-                    count++;
-                    if (count === targetCount) {
-                        stream.ctx.drawImage(frame, 0, 0);
-                    }
-                    frame.close();
-                    if (count >= targetCount) resolve();
-                },
-                error: reject
+                output: (frame) => handleStreamOutput(stream, frame),
+                error: (e) => {
+                    console.error('Stream decoder error:', e);
+                    stream.decoder = null;
+                }
             });
+        }
 
-            const config = stream.mp4.getConfig();
+        const config = stream.mp4.getConfig();
+        if (stream.decoder.state === 'unconfigured') {
+            stream.decoder.configure({
+                codec: config.codec,
+                width: config.width,
+                height: config.height
+            });
+        }
+
+        const isSequential = (stream.lastDecodedFrameIndex === index - 1);
+
+        if (isSequential) {
+            stream.seekTargetTimestamp = null;
+            // OPTIMIZATION: Sequential pipeline - no flush
+            stream.decoder.decode(createChunkForStream(stream, targetFrame));
+            stream.lastDecodedFrameIndex = index;
+        } else {
+            // Seek
+            stream.decoder.reset();
             stream.decoder.configure({
                 codec: config.codec,
                 width: config.width,
                 height: config.height
             });
 
+            let keyIdx = index;
+            while (keyIdx >= 0 && !stream.frames[keyIdx].keyframe) keyIdx--;
+            if (keyIdx < 0) keyIdx = 0;
+
+            stream.seekTargetTimestamp = targetTs;
             for (let i = keyIdx; i <= index; i++) {
                 stream.decoder.decode(createChunkForStream(stream, stream.frames[i]));
             }
-            stream.decoder.flush().catch(reject);
-        });
+            
+            // Seeking requires flush
+            await stream.decoder.flush();
+            stream.lastDecodedFrameIndex = index;
+        }
+
     } catch (e) {
-        // keep quiet; decode errors can happen during rapid scrubs
+        if (e?.name !== 'AbortError') {
+             // ignore
+        }
     } finally {
         stream.decoding = false;
         if (stream.pendingFrame !== null) {
@@ -2104,12 +2185,28 @@ async function streamDecodeFrame(stream, index) {
     }
 }
 
+function handleStreamOutput(stream, frame) {
+    const frameTsMs = frame.timestamp / 1000;
+    let shouldDraw = true;
+    if (stream.seekTargetTimestamp != null) {
+        if (Math.abs(frameTsMs - stream.seekTargetTimestamp) > 0.01) {
+            shouldDraw = false;
+        } else {
+            stream.seekTargetTimestamp = null;
+        }
+    }
+
+    if (shouldDraw && stream.ctx) {
+        stream.ctx.drawImage(frame, 0, 0);
+    }
+    frame.close();
+}
+
 function createChunkForStream(stream, frame) {
-    const sc = new Uint8Array([0, 0, 0, 1]);
     const config = stream.mp4.getConfig();
     const data = frame.keyframe
-        ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
-        : DashcamMP4.concat(sc, frame.data);
+        ? DashcamMP4.concat(NAL_START_CODE, frame.sps || config.sps, NAL_START_CODE, frame.pps || config.pps, NAL_START_CODE, frame.data)
+        : DashcamMP4.concat(NAL_START_CODE, frame.data);
     return new EncodedVideoChunk({
         type: frame.keyframe ? 'key' : 'delta',
         timestamp: frame.timestamp * 1000,
@@ -2120,44 +2217,77 @@ function createChunkForStream(stream, frame) {
 async function decodeFrame(index) {
     player.decoding = true;
     try {
-        // Find preceding keyframe
-        let keyIdx = index;
-        while (keyIdx >= 0 && !player.frames[keyIdx].keyframe) keyIdx--;
-        if (keyIdx < 0) return; // Should not happen if firstKeyframe is correct
+        if (!player.frames?.[index]) return;
+        const targetFrame = player.frames[index];
+        const targetTs = targetFrame.timestamp;
 
-        if (player.decoder) try { player.decoder.close(); } catch { }
-        
-        const targetCount = index - keyIdx + 1;
-        let count = 0;
-
-        await new Promise((resolve, reject) => {
+        // Initialize or re-create decoder if needed
+        if (!player.decoder || player.decoder.state === 'closed') {
             player.decoder = new VideoDecoder({
-                output: frame => {
-                    count++;
-                    if (count === targetCount) {
-                        ctx.drawImage(frame, 0, 0);
-                    }
-                    frame.close();
-                    if (count >= targetCount) resolve();
-                },
-                error: reject
+                output: handleDecoderOutput,
+                error: (e) => {
+                    console.error('VideoDecoder error:', e);
+                    player.decoder = null; // Force recreation on next attempt
+                }
             });
+        }
 
-            const config = player.mp4.getConfig();
+        const config = player.mp4.getConfig();
+        if (player.decoder.state === 'unconfigured') {
+            player.decoder.configure({
+                codec: config.codec,
+                width: config.width,
+                height: config.height
+            });
+        }
+
+        // Determine if we can decode sequentially
+        // We need the previous frame to have been the last one decoded
+        const isSequential = (player.lastDecodedFrameIndex === index - 1);
+
+        if (isSequential) {
+            // Fast path: just decode the next frame
+            player.seekTargetTimestamp = null; // Ensure we draw it
+            
+            // OPTIMIZATION: Do NOT flush in sequential mode. 
+            // Just feed the pipeline. The output callback handles the drawing.
+            player.decoder.decode(createChunk(targetFrame));
+            
+            // We assume success here for the index tracker. 
+            // If it fails, the error handler or visual glitch will occur, but speed is king.
+            player.lastDecodedFrameIndex = index;
+            
+        } else {
+            // Seek path: decode from nearest preceding keyframe
+            // For random access, we MUST flush to clear the pipe before starting a new sequence,
+            // or we might get leftover frames.
+            // Actually, reset() handles clearing.
+            player.decoder.reset();
             player.decoder.configure({
                 codec: config.codec,
                 width: config.width,
                 height: config.height
             });
 
+            let keyIdx = index;
+            while (keyIdx >= 0 && !player.frames[keyIdx].keyframe) keyIdx--;
+            if (keyIdx < 0) keyIdx = 0;
+
+            // Only draw the final frame of the seek sequence
+            player.seekTargetTimestamp = targetTs;
+
             for (let i = keyIdx; i <= index; i++) {
                 player.decoder.decode(createChunk(player.frames[i]));
             }
-            player.decoder.flush().catch(reject);
-        });
+            
+            // For seeking, we MUST wait for flush to ensure we draw the correct frame 
+            // before considering the seek 'done'.
+            await player.decoder.flush();
+            player.lastDecodedFrameIndex = index;
+        }
+
     } catch (e) {
-        // AbortError ("Close called") is expected during rapid seeks / segment transitions.
-        if (e?.name !== 'AbortError' && !String(e?.message || '').includes('Close called')) {
+        if (e?.name !== 'AbortError') {
             console.error('Decode error:', e);
         }
     } finally {
@@ -2170,12 +2300,38 @@ async function decodeFrame(index) {
     }
 }
 
+// Map of timestamp (us) -> resolve function
+const frameDrawResolvers = new Map();
+
+function handleDecoderOutput(frame) {
+    const frameTsMs = frame.timestamp / 1000;
+    
+    // If seeking, checks if this is the target frame.
+    // If sequential (seekTargetTimestamp is null), draw everything.
+    let shouldDraw = true;
+    if (player.seekTargetTimestamp != null) {
+        // Use a small epsilon for float comparison logic if needed, 
+        // though timestamps should be fairly exact from the same source.
+        if (Math.abs(frameTsMs - player.seekTargetTimestamp) > 0.01) {
+            shouldDraw = false;
+        } else {
+            player.seekTargetTimestamp = null; // Found it
+        }
+    }
+
+    if (shouldDraw) {
+        // Draw to canvas
+        ctx.drawImage(frame, 0, 0);
+    }
+    
+    frame.close();
+}
+
 function createChunk(frame) {
-    const sc = new Uint8Array([0, 0, 0, 1]);
     const config = player.mp4.getConfig();
     const data = frame.keyframe
-        ? DashcamMP4.concat(sc, frame.sps || config.sps, sc, frame.pps || config.pps, sc, frame.data)
-        : DashcamMP4.concat(sc, frame.data);
+        ? DashcamMP4.concat(NAL_START_CODE, frame.sps || config.sps, NAL_START_CODE, frame.pps || config.pps, NAL_START_CODE, frame.data)
+        : DashcamMP4.concat(NAL_START_CODE, frame.data);
         
     return new EncodedVideoChunk({
         type: frame.keyframe ? 'key' : 'delta',
